@@ -1,20 +1,19 @@
--- main.lua — Love2D Stat-Based Fight Sim (full version)
+-- Love2D Stat-Based Fight Sim (with per-entity image scaling)
 -- Uses items.lua and monsters.lua in the project root (require("items"), require("monsters"))
--- Features:
---  • Top 2/3 battle scene, bottom 1/3 inventory + Fight + log
---  • Round banner (shows Round 1 before first fight)
---  • Click to equip/unequip; equipped items highlighted yellow
---  • Auto-resolve, turn-based fights; reset to Round 1 on death
---  • Scrollable inventories with mouse wheel
---  • Item icons scaled to ICON_SIZE inside rows
---  • Starter item whitelist (Option B) so loot-only items don't appear at start
---  • Monster-specific loot in monsters.lua with percentage drop rates (0–100 or 0.0–1.0)
 
 local W, H = 800, 600
 local menuHeightFrac = 1/3
 local ui = { weaponScroll = 0, armorScroll = 0, logScroll = 0 }
 local fonts = {}
-local ICON_SIZE = 28 -- scaled icon size for inventory items
+
+-- Inventory list icon size (unchanged; keeps inventory tidy)
+local ICON_SIZE = 28
+
+-- === Global defaults (Step 3) ===
+-- Applied to the LARGE images shown in the top area (monster and loot popup).
+-- You can tweak these to make everything bigger/smaller at once.
+local DEFAULT_MONSTER_SCALE = 1.5
+local DEFAULT_LOOT_SCALE    = 1.3
 
 local Items = require("items")
 local Monsters = require("monsters")
@@ -22,45 +21,63 @@ local Monsters = require("monsters")
 -- ########################
 -- ## Game Data & State  ##
 -- ########################
-local player = { baseHP = 30, baseATK = 5, baseDEF = 1, hp = 30, weapon = nil, armor  = nil }
+
+-- XP curve: cumulative XP required to *reach* level N (index = level)
+local XP_TABLE = { 0, 10, 30, 60, 100, 150, 210, 280 }
+local function xpForLevel(level)
+  if XP_TABLE[level] then return XP_TABLE[level] end
+  local last = XP_TABLE[#XP_TABLE]
+  return last + (level - #XP_TABLE) * 70
+end
+
+local player = { baseHP = 30, baseATK = 5, baseDEF = 1, hp = 30, level = 1, xp = 0,
+                 stats = { STR = 0, VIT = 0, DEF = 0 }, statPoints = 0,
+                 weapon = nil, armor  = nil }
 local items  = { weapons = {}, armors = {} }
 local monsters = {}
 local sprites = { items = {}, monsters = {} }
 
 local game = {
   currentMonster = nil,
-  monsterIndex = 0,  -- 0 = none spawned yet (banner shows Round 1)
+  monsterIndex = 0,
   inBattle = false,
   battleTimer = 0,
-  turnInterval = 0.45,
+  turnInterval = 1,
   turn = "player",
   log = {"Welcome! Equip gear then press FIGHT."},
   won = false,
   lost = false,
+  justLeveled = false,
 }
-local lootPopup = {
-  visible = false,
-  item = nil,
-  timer = 0,
-  duration = 0.4,  -- animation time (in seconds)
-}
+
+local lootPopup = { visible = false, item = nil, timer = 0, duration = 0.4 }
+
 -- Only these are available at start (others must drop)
-local START_WEAPONS = { stick=true, sword=true }
-local START_ARMORS  = { cloth=true, chain=true }
+local START_WEAPONS = { stick=true, sword=false }
+local START_ARMORS  = { cloth=true, chain=false }
 
 -- ########################
 -- ## Helpers            ##
 -- ########################
 local function totalATK()
-  return player.baseATK
+  local statATK = (player.stats and player.stats.STR or 0) * 1
+  return player.baseATK + statATK
     + (player.weapon and (player.weapon.atk or 0) or 0)
     + (player.armor  and (player.armor.atk  or 0) or 0)
 end
 
 local function totalDEF()
-  return player.baseDEF
+  local statDEF = (player.stats and player.stats.DEF or 0) * 0.5
+  return player.baseDEF + statDEF
     + (player.weapon and (player.weapon.def or 0) or 0)
     + (player.armor  and (player.armor.def  or 0) or 0)
+end
+
+local function totalHP()
+  local statHP = (player.stats and player.stats.VIT or 0)
+  return player.baseHP + statHP
+    -- + (player.weapon and (player.weapon.def or 0) or 0)
+    -- + (player.armor  and (player.armor.def  or 0) or 0)
 end
 
 local function pushLog(text)
@@ -68,7 +85,9 @@ local function pushLog(text)
   if #game.log > 100 then table.remove(game.log) end
 end
 
-local function resetPlayerHP() player.hp = player.baseHP end
+local function resetPlayerHP()
+  player.hp = totalHP ()
+end
 
 -- Add a specific item to runtime inventory if missing
 local function addItemIfMissing(kind, id)
@@ -96,15 +115,13 @@ local function addItemById(id)
   return false
 end
 
--- Grant loot defined on the monster entry.
--- Supports entries like "scimitar" (guaranteed) or {id="scimitar", chance=40} or {id="scimitar", chance=0.4}
+-- Loot chance helpers
 local function normalizeChance(c)
   if not c then return 100 end
   if c <= 1 then return c * 100 end
   return c
 end
 
--- In grantLootForMonster
 local function grantLootForMonster(monDef)
   if not monDef or not monDef.loot then return end
   local gained = {}
@@ -128,27 +145,47 @@ local function grantLootForMonster(monDef)
     end
   end
   if #gained > 0 then
-  local gainedId = gained[1]
-  pushLog("Loot: " .. gainedId .. " acquired!")
-
-  -- Look up the item object
-  for _, it in ipairs(Items.weapons) do
-    if it.id == gainedId then lootPopup.item = it end
-  end
-  for _, it in ipairs(Items.armors) do
-    if it.id == gainedId then lootPopup.item = it end
-  end
-
-  -- Show loot as a temporary 'replacement' for the monster
-  if lootPopup.item then
-    lootPopup.visible = true
-    lootPopup.timer = 0
-    game.inBattle = false -- ensure no battle runs during loot
+    local gainedId = gained[1]
+    pushLog("Loot: " .. gainedId .. " acquired!")
+    -- Look up the item object to show in popup
+    lootPopup.item = nil
+    for _, it in ipairs(Items.weapons) do if it.id == gainedId then lootPopup.item = it end end
+    for _, it in ipairs(Items.armors)  do if it.id == gainedId then lootPopup.item = it end end
+    if lootPopup.item then
+      lootPopup.visible = true
+      lootPopup.timer = 0
+      game.inBattle = false
+    end
   end
 end
 
+-- Leveling
+local function checkLevelUps()
+  while player.xp >= xpForLevel(player.level + 1) do
+    player.level = player.level + 1
+    player.statPoints = (player.statPoints or 0) + 3
+    player.baseHP = player.baseHP + 5
+    resetPlayerHP()
+    leveled = true
+    pushLog(("Level up! Now level %d (+3 stat points, +5 base HP)."):format(player.level))
+  end
+  if leveled then game.justLeveled = true end
 end
 
+local function awardXPForKill(monDef)
+  local gained = (monDef and monDef.xp) or 0
+  if gained > 0 and game.justLeveled then
+    game.justLeveled = false
+  end
+  if gained > 0 then
+    player.xp = player.xp + gained
+    pushLog(("Gained %d XP."):format(gained))
+    checkLevelUps()
+  end
+end
+
+
+-- Monster flow
 local function spawnNextMonster()
   if game.monsterIndex >= #monsters then
     game.won = true
@@ -230,14 +267,15 @@ function love.update(dt)
         if game.currentMonster.hp <= 0 then
           pushLog(game.currentMonster.name .. " is defeated!")
           game.inBattle = false
+          awardXPForKill(monsters[game.monsterIndex])
           grantLootForMonster(monsters[game.monsterIndex])
           if game.monsterIndex == #monsters then
             game.won = true
             pushLog("All monsters defeated! You win.")
           end
-            if lootPopup.visible then
-              lootPopup.timer = lootPopup.timer + dt
-            end
+          if lootPopup.visible then
+            lootPopup.timer = lootPopup.timer + dt
+          end
         else
           game.turn = "monster"
         end
@@ -271,11 +309,18 @@ local function drawStats()
   love.graphics.setFont(fonts.ui)
   local y = 10
   love.graphics.print("Player", 16, y); y = y + 22
-  love.graphics.print(("HP: %d/%d"):format(player.hp, player.baseHP), 16, y); y = y + 18
+  love.graphics.print(("HP: %d/%d"):format(player.hp, totalHP()), 16, y); y = y + 18
   love.graphics.print(("ATK: %d"):format(totalATK()), 16, y); y = y + 18
   love.graphics.print(("DEF: %d"):format(totalDEF()), 16, y); y = y + 18
+  --love.graphics.print(("LVL: %d  XP: %d / %d"):format(player.level, player.xp, xpForLevel(player.level + 1)), 16, y); y = y + 18
+  -- XP view: show 0 progress right after level-up
+  local floorXP = xpForLevel(player.level)
+  local nextXP  = xpForLevel(player.level + 1)
+  local need    = nextXP - floorXP
+  local have    = game.justLeveled and 0 or math.max(0, player.xp - floorXP)
+  love.graphics.print(("LVL: %d  XP: %d / %d"):format(player.level, have, need), 16, y); y = y + 18
 
-  -- Equipped names in yellow
+
   if player.weapon then love.graphics.setColor(1,1,0) end
   love.graphics.print("Weapon: ".. (player.weapon and player.weapon.name or "None"), 16, y); y = y + 18
   love.graphics.setColor(1,1,1)
@@ -292,57 +337,49 @@ local function drawRoundBanner()
   love.graphics.printf(("Round %d / %d"):format(roundShown, #monsters), 0, 4, W, "center")
 end
 
-local function drawMonster()
+-- Top-area image (monster or loot) with per-entity + global scaling
+local function drawArenaImage()
   local topH = H * (1 - menuHeightFrac)
+  local xCenter, yCenter = W/2, topH/2 + 20
 
-  local img, name
-
+  local img, name, scale
   if lootPopup.visible and lootPopup.item then
-    -- Show loot image and name
     img = sprites.items[lootPopup.item.id]
     name = "You received: " .. lootPopup.item.name
+    scale = (lootPopup.item.scale or 1) * DEFAULT_LOOT_SCALE
   elseif game.currentMonster then
-    -- Show monster image and name
     img = sprites.monsters[game.monsterIndex]
     name = game.currentMonster.name
+    local monDef = monsters[game.monsterIndex]
+    scale = ((monDef and monDef.scale) or 1) * DEFAULT_MONSTER_SCALE
   else
     return
   end
 
-  -- Target visual box size (same for monster and loot)
-  local maxW, maxH = 160, 120
-  local x, y = W/2, topH/2 + 20
-
-  -- Image scaling
+  -- Allow bigger box than before; still clamp to fit viewport nicely
+  local maxW, maxH = 300, 220  -- grew from the earlier 160x120
   if img then
     local iw, ih = img:getDimensions()
-    local scale = math.min(maxW / iw, maxH / ih)
-    local drawX = x - (iw * scale) / 2
-    local drawY = y - (ih * scale) / 2
-    love.graphics.setColor(1, 1, 1)
-    love.graphics.draw(img, drawX, drawY, 0, scale, scale)
+    local fitScale = math.min(maxW / iw, maxH / ih)
+    local finalScale = math.min(scale, fitScale)  -- respect entity/global scale but never overflow box
+    local drawX = xCenter - (iw * finalScale) / 2
+    local drawY = yCenter - (ih * finalScale) / 2
+    love.graphics.setColor(1,1,1)
+    love.graphics.draw(img, drawX, drawY, 0, finalScale, finalScale)
   else
-    love.graphics.setColor(1, 1, 1)
-    love.graphics.rectangle("line", x - maxW/2, y - maxH/2, maxW, maxH, 8, 8)
+    love.graphics.setColor(1,1,1)
+    love.graphics.rectangle("line", xCenter - maxW/2, yCenter - maxH/2, maxW, maxH, 8, 8)
   end
 
-  -- Name/label
   love.graphics.setFont(fonts.ui)
-  love.graphics.setColor(1, 1, 1)
-  love.graphics.printf(name, 0, y + maxH/2 + 10, W, "center")
+  love.graphics.setColor(1,1,1)
+  love.graphics.printf(name, 0, yCenter + maxH/2 + 10, W, "center")
 
-  -- OK Button if loot is visible
   if lootPopup.visible then
-    lootPopup.okButton = {
-      x = W/2 - 50,
-      y = y + maxH/2 + 40,
-      w = 100,
-      h = 30
-    }
-    love.graphics.setColor(0.2, 0.2, 0.2)
+    lootPopup.okButton = { x = W/2 - 50, y = yCenter + maxH/2 + 40, w = 100, h = 30 }
+    love.graphics.setColor(0.2,0.2,0.2)
     love.graphics.rectangle("fill", lootPopup.okButton.x, lootPopup.okButton.y, lootPopup.okButton.w, lootPopup.okButton.h, 6, 6)
-    love.graphics.setColor(1, 1, 1)
-    love.graphics.setFont(fonts.ui)
+    love.graphics.setColor(1,1,1)
     love.graphics.printf("OK", lootPopup.okButton.x, lootPopup.okButton.y + 6, lootPopup.okButton.w, "center")
   end
 end
@@ -361,14 +398,14 @@ local function drawLog(x, y, w, h)
   local start = math.max(1, scroll + 1)
   local finish = math.min(#game.log, start + visible - 1)
 
-  local textAreaW = w - 20 -- leave room for scrollbar
+  local textAreaW = w - 20
   local yy = y + 18
 
   for i = start, finish do
     love.graphics.printf(game.log[i], x, yy + (i-start)*lineH, textAreaW)
   end
 
-  -- Scroll bar area
+  -- Simple scrollbar widgets
   local barX = x + textAreaW + 4
   local barY = y + 18
   local barH = h - 24
@@ -376,28 +413,66 @@ local function drawLog(x, y, w, h)
   local trackY = barY + arrowH
   local trackH = barH - arrowH * 2
 
-  -- Store button hitboxes
-  ui.logScrollUp = {x = barX, y = barY, w = 16, h = arrowH}
+  ui.logScrollUp   = {x = barX, y = barY,               w = 16, h = arrowH}
   ui.logScrollDown = {x = barX, y = barY + barH - arrowH, w = 16, h = arrowH}
 
-  -- Draw up arrow
   love.graphics.rectangle("line", ui.logScrollUp.x, ui.logScrollUp.y, ui.logScrollUp.w, ui.logScrollUp.h)
   love.graphics.printf("^", ui.logScrollUp.x, ui.logScrollUp.y, ui.logScrollUp.w, "center")
-
-  -- Draw down arrow
   love.graphics.rectangle("line", ui.logScrollDown.x, ui.logScrollDown.y, ui.logScrollDown.w, ui.logScrollDown.h)
   love.graphics.printf("v", ui.logScrollDown.x, ui.logScrollDown.y, ui.logScrollDown.w, "center")
 
-  -- Draw track
   love.graphics.rectangle("line", barX, trackY, 16, trackH)
-
-  -- Thumb (based on scroll position)
   if maxScroll > 0 then
     local thumbH = math.max(10, trackH * (visible / #game.log))
     local thumbY = trackY + (trackH - thumbH) * (scroll / maxScroll)
     love.graphics.rectangle("fill", barX + 1, thumbY, 14, thumbH)
   end
 end
+
+local function drawStatSpendPanel()
+  local topH = H * (1 - menuHeightFrac)
+  local panelW, panelH = 220, 120   -- ↑ give the panel a bit more height
+  local x, y = 16, topH - panelH - 10
+
+  love.graphics.setFont(fonts.ui)
+  love.graphics.setColor(1,1,1)
+  love.graphics.rectangle("line", x, y, panelW, panelH, 8, 8)
+
+  local title = "Stats"
+  if (player.statPoints or 0) > 0 then
+    title = title .. "  (+)"
+  end
+  love.graphics.print(title, x + 8, y + 6)
+
+  -- Lines
+  local lineY = y + 30
+  local lineH = 22
+
+  ui.statButtons = {}
+  local canSpend = (player.statPoints or 0) > 0 and not game.inBattle and not lootPopup.visible
+
+  local function row(label, key, value, rowIndex)
+    local ry = lineY + (rowIndex-1) * lineH
+    love.graphics.print(("%s: %d"):format(label, value or 0), x + 8, ry)
+    if canSpend then
+      local bx, by, bw, bh = x + panelW - 34, ry - 2, 26, 20
+      love.graphics.rectangle("line", bx, by, bw, bh, 4, 4)
+      love.graphics.printf("+", bx, by + 2, bw, "center")
+      ui.statButtons[key] = { x = bx, y = by, w = bw, h = bh, stat = key }
+    end
+  end
+
+  row("STR", "STR", player.stats.STR or 0, 1)
+  row("VIT", "VIT", player.stats.VIT or 0, 2)
+  row("DEF", "DEF", player.stats.DEF or 0, 3)
+
+  -- Footer: place under the last row with extra padding
+  local afterRowsY = lineY + 3 * lineH       -- baseline of last row area
+  local footerY    = afterRowsY + 5          -- ↑ 10px gap above "Unspent"
+  love.graphics.setFont(fonts.small)
+  love.graphics.print(("Unspent points: %d"):format(player.statPoints or 0), x + 8, footerY)
+end
+
 
 
 local function drawInventoryColumn(kind, x, menuY, colW, padding)
@@ -406,7 +481,7 @@ local function drawInventoryColumn(kind, x, menuY, colW, padding)
   love.graphics.print(header, x, menuY + padding)
 
   local list = items[kind]
-  local itemH = 44     -- room for icon + text line
+  local itemH = 44
   local topY = menuY + padding + 24
   local listH = (H - menuY) - padding - 8
   local maxVisible = math.max(1, math.floor((listH - 24) / itemH))
@@ -431,15 +506,14 @@ local function drawInventoryColumn(kind, x, menuY, colW, padding)
     local r = {x=x, y=by, w=colW, h=itemH-6, item=it, kind=(kind == "weapons") and "weapon" or "armor"}
     love.graphics.rectangle("line", r.x, r.y, r.w, r.h, 6, 6)
 
-    -- Icon scaled to ICON_SIZE
+    -- Keep inventory icons neatly bounded by ICON_SIZE (unchanged)
     local icon = sprites.items[it.id]
     if icon then
       local iw, ih = icon:getDimensions()
-      local scale = math.min(ICON_SIZE/iw, ICON_SIZE/ih)
-      love.graphics.draw(icon, r.x + 6, r.y + (itemH-ICON_SIZE)/2, 0, scale, scale)
+      local scaleToFit = math.min(ICON_SIZE/iw, ICON_SIZE/ih)
+      love.graphics.draw(icon, r.x + 6, r.y + (itemH-ICON_SIZE)/2, 0, scaleToFit, scaleToFit)
     end
 
-    -- Text
     local equipped = (r.kind == "weapon" and player.weapon and player.weapon.id == it.id)
                   or  (r.kind == "armor"  and player.armor  and player.armor.id  == it.id)
     if equipped then love.graphics.setColor(1,1,0) end
@@ -467,11 +541,9 @@ local function drawMenu()
   local x2 = x1 + colW + padding
   local x3 = x2 + colW + padding
 
-  -- Inventory columns
   drawInventoryColumn("weapons", x1, menuY, colW, padding)
   drawInventoryColumn("armors",  x2, menuY, colW, padding)
 
-  -- Fight button / status
   ui.fightButton = {x=x3, y=menuY + padding, w=colW, h=44}
   love.graphics.rectangle("line", ui.fightButton.x, ui.fightButton.y, ui.fightButton.w, ui.fightButton.h, 10, 10)
   local fbLabel
@@ -487,16 +559,7 @@ local function drawMenu()
   end
   love.graphics.printf(fbLabel, ui.fightButton.x, ui.fightButton.y + 12, ui.fightButton.w, "center")
 
-  -- Stats panel
-  local panelY = ui.fightButton.y + ui.fightButton.h + 8
-  local panelH = 90
-  love.graphics.rectangle("line", x3, panelY, colW, panelH, 8, 8)
-  love.graphics.print("Your Stats", x3 + 8, panelY + 6)
-  love.graphics.print(("ATK %d  DEF %d"):format(totalATK(), totalDEF()), x3 + 8, panelY + 28)
-  love.graphics.print("Tip: #2 needs a weapon, #3 needs weapon+armor.", x3 + 8, panelY + 50)
-
-  -- Log panel
-  local logY = panelY + panelH + 8
+  local logY = ui.fightButton.y + ui.fightButton.h + 8
   local logH = (H - menuY) - (logY - menuY) - padding
   if logH > 40 then
     love.graphics.rectangle("line", x3, logY, colW, logH, 8, 8)
@@ -504,36 +567,33 @@ local function drawMenu()
   end
 end
 
-
 function love.draw()
   love.graphics.clear(0.11,0.12,0.14)
 
-  -- MAIN AREA
   local topH = H * (1 - menuHeightFrac)
   love.graphics.setColor(1,1,1)
   love.graphics.rectangle("line", 0, 0, W, topH)
 
   drawRoundBanner()
   local statsBottom = drawStats()
-  drawMonster()
+  drawArenaImage()
 
-  -- HP bars under stats (avoid overlap)
   local barW = 220
   local playerBarY = statsBottom + 8
-  drawBar(16, playerBarY, barW, 18, player.hp / player.baseHP)
+  drawBar(16, playerBarY, barW, 18, player.hp / totalHP())
   love.graphics.print("Player HP", 16, playerBarY + 22)
   if game.currentMonster then
     drawBar(W - barW - 16, playerBarY, barW, 18, game.currentMonster.hp / game.currentMonster.maxhp)
     love.graphics.print("Monster HP", W - barW - 16, playerBarY + 22)
   end
+  
+  -- NEW: stat point panel (bottom-left of the top two-thirds)
+  drawStatSpendPanel()
 
-  -- MENU (bottom third)
   drawMenu()
 
-  -- Footer
   love.graphics.setFont(fonts.small)
   love.graphics.printf("Stat Fighter (prototype) — equip gear then FIGHT.", 0, H - 18, W, "center")
-
 end
 
 -- ########################
@@ -544,22 +604,35 @@ local function pointInRect(px, py, r)
 end
 
 function love.mousepressed(x, y, button)
--- If loot is shown, only allow clicking OK
-if lootPopup.visible then
-  if lootPopup.okButton and pointInRect(x, y, lootPopup.okButton) then
-    lootPopup.visible = false
-    lootPopup.item = nil
+  -- If loot is shown, only allow clicking OK
+  if lootPopup.visible then
+    if lootPopup.okButton and pointInRect(x, y, lootPopup.okButton) then
+      lootPopup.visible = false
+      lootPopup.item = nil
+    end
     return
-  else
-    return -- block other clicks
   end
-end
-
 
   if button ~= 1 then return end
-  if game.inBattle then return end -- disable equipping during auto battle
+  if game.inBattle then return end
+  
+    -- Spend stat points with [+] buttons
+  if ui.statButtons and (player.statPoints or 0) > 0 and not game.inBattle then
+    for _, b in pairs(ui.statButtons) do
+      if x >= b.x and x <= b.x + b.w and y >= b.y and y <= b.y + b.h then
+        local k = b.stat
+        player.stats[k] = (player.stats[k] or 0) + 1
+        player.statPoints = (player.statPoints or 0) - 1
 
-  -- Equip weapon
+        -- If VIT increases, you might want to keep current HP as-is but ensure it doesn't exceed new max:
+        player.hp = math.min(player.hp, totalHP())
+
+        pushLog(("Allocated +1 %s (remaining %d)"):format(k, player.statPoints))
+        return
+      end
+    end
+  end
+
   if ui.weaponButtons then
     for _, r in ipairs(ui.weaponButtons) do
       if pointInRect(x, y, r) then
@@ -575,7 +648,6 @@ end
     end
   end
 
-  -- Equip armor
   if ui.armorButtons then
     for _, r in ipairs(ui.armorButtons) do
       if pointInRect(x, y, r) then
@@ -590,23 +662,7 @@ end
       end
     end
   end
-  
-    -- Log Scroll Up
-  if ui.logScrollUp and pointInRect(x, y, ui.logScrollUp) then
-    ui.logScroll = math.max(0, (ui.logScroll or 0) - 1)
-    return
-  end
 
-  -- Log Scroll Down
-  if ui.logScrollDown and pointInRect(x, y, ui.logScrollDown) then
-    local logLines = #game.log
-    local visible = 8 -- Should match drawLog calculation
-    local maxScroll = math.max(0, logLines - visible)
-    ui.logScroll = math.min(maxScroll, (ui.logScroll or 0) + 1)
-    return
-  end
-
-  -- Fight
   if ui.fightButton and pointInRect(x, y, ui.fightButton) then
     if game.won then return end
     if game.lost then
@@ -630,9 +686,7 @@ function love.wheelmoved(dx, dy)
   local listArea1 = { x = x1, y = menuY + padding, w = colW, h = H - menuY - padding }
   local listArea2 = { x = x2, y = menuY + padding, w = colW, h = H - menuY - padding }
 
-  local function inArea(a)
-    return mx >= a.x and mx <= a.x + a.w and my >= a.y and my <= a.y + a.h
-  end
+  local function inArea(a) return mx >= a.x and mx <= a.x + a.w and my >= a.y and my <= a.y + a.h end
 
   if dy ~= 0 then
     if inArea(listArea1) then
@@ -641,27 +695,26 @@ function love.wheelmoved(dx, dy)
       ui.armorScroll  = math.max(0, (ui.armorScroll  or 0) - dy)
     end
   end
--- Detect if mouse is inside the log panel before scrolling it
-local logY = H * (1 - menuHeightFrac) + 44 + 90 + 8 + 90 + 8  -- Matches panel layout
-local logH = H - logY - 12
-local colW = (W - 36) / 3
-local x3 = 24 + colW * 2 + 24
 
-local inLogArea = mx >= x3 and mx <= x3 + colW and my >= logY and my <= logY + logH
-if inLogArea then
-  local lineH = 16
-  local visible = math.floor((logH - 24) / lineH)
-  local maxScroll = math.max(0, #game.log - visible)
-  ui.logScroll = math.max(0, math.min(maxScroll, (ui.logScroll or 0) + dy))  -- dy: up = positive
-end
-
+  -- Right column (log) wheel support
+  local fightH = 44
+  local logY = (H * (1 - menuHeightFrac)) + 12 + fightH + 8
+  local colW2 = (W - 36) / 3
+  local x3 = 12 + colW2 * 2 + 12
+  local logH = H - logY - 12
+  local inLogArea = mx >= x3 and mx <= x3 + colW2 and my >= logY and my <= logY + logH
+  if inLogArea then
+    local lineH = 16
+    local visible = math.floor((logH - 24) / lineH)
+    local maxScroll = math.max(0, #game.log - visible)
+    ui.logScroll = math.max(0, math.min(maxScroll, (ui.logScroll or 0) - dy))
+  end
 end
 
 function love.keypressed(key)
   if key == "return" or key == "space" then
     if not game.inBattle then startBattle() end
   elseif key == "r" then
-    -- Hard reset (keeps unlocked items if you added any via loot)
     game = {
       currentMonster=nil, monsterIndex=0, inBattle=false, battleTimer=0,
       turnInterval=0.45, turn="player", log={"Reset. Equip gear then press FIGHT."},
@@ -672,4 +725,3 @@ function love.keypressed(key)
     player.armor = nil
   end
 end
-
