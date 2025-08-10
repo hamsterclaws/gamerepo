@@ -9,13 +9,14 @@ M.weapons = {
   { id = "sword",    name = "Sword",    atk = 5,  def = 0, desc = "+5 ATK",  img = "assets/items/sword.png",    scale = 1.1 },
   { id = "scimitar", name = "Scimitar", atk = 5,  def = 0, desc = "+5 ATK",  img = "assets/items/scimitar.png", scale = 1.3 },
   { id = "axe",      name = "Axe",      atk = 15, def = 0, desc = "+5 ATK",  img = "assets/items/axe.png",      scale = 1.4 },
+  { id = "woodClub",      name = "Wooden Club",      atk = 5, def = 0, desc = "+5 ATK",  img = "assets/items/woodclub.png",      scale = 1.4 },
 }
 
 M.armors = {
   { id = "cloth",  name = "Cloth",       atk = 0, def = 1, desc = "+1 DEF",            img = "assets/armor/cloth.png",  scale = 1.0 },
   { id = "chain",  name = "Chain",       atk = 0, def = 3, desc = "+3 DEF",            img = "assets/armor/chain.png",  scale = 1.1 },
   -- NOTE: ensure the path points to a PNG file in your assets; add ".png" if needed.
-  { id = "Plain T-Shirt", name = "Plain T-Shirt", atk = 1, def = 3, desc = "+1 ATK, +3 DEF", img = "assets/armor/shirt.png", scale = 1.2 },
+  { id = "Plain T-Shirt", name = "tshirt", atk = 1, def = 3, desc = "+1 ATK, +3 DEF", img = "assets/armor/shirt.png", scale = 1.2 },
 }
 
 return M
