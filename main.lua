@@ -7,7 +7,7 @@ local ui = { weaponScroll = 0, armorScroll = 0, logScroll = 0 }
 local fonts = {}
 
 -- Inventory list icon size (unchanged; keeps inventory tidy)
-local ICON_SIZE = 28
+local ICON_SIZE = 40
 
 -- === Global defaults (Step 3) ===
 -- Applied to the LARGE images shown in the top area (monster and loot popup).
@@ -36,14 +36,33 @@ local player = { baseHP = 30, baseATK = 5, baseDEF = 1, hp = 30, level = 1, xp =
                  weapon = nil, armor  = nil }
 local items  = { weapons = {}, armors = {} }
 local monsters = {}
-local sprites = { items = {}, monsters = {} }
+local sprites = { items = {}, monsters = {}, backgrounds = {} }
+
+-- === Backgrounds (top 2/3) ===
+-- Replace these with your actual PNGs under ./assets/backgrounds/
+local BG_LIST = {
+  "assets/backgrounds/zone1.png", -- levels   1–10
+  "assets/backgrounds/zone2.png", -- levels  11–20
+  "assets/backgrounds/zone3.png", -- levels  21–30
+  "assets/backgrounds/zone4.png", -- levels  31–40
+  "assets/backgrounds/zone5.png", -- levels  41–50
+}
+
+local bg = {
+  current = nil,      -- Image
+  next = nil,         -- Image during transition
+  t = 1,              -- 0→1 progress of transition (1 = done)
+  duration = 0.8,     -- seconds for a soft cross-fade
+  mode = "cover",     -- "cover" | "stretch" | "contain"
+}
 
 local game = {
   currentMonster = nil,
   monsterIndex = 0,
   inBattle = false,
   battleTimer = 0,
-  turnInterval = 1,
+  -- Player and Monster turn in seconds
+  turnInterval = 0.8,
   turn = "player",
   log = {"Welcome! Equip gear then press FIGHT."},
   won = false,
@@ -65,6 +84,7 @@ end
 -- Only these are available at start (others must drop)
 local START_WEAPONS = { stick=true, sword=false }
 local START_ARMORS  = { cloth=true, chain=false }
+
 
 -- ########################
 -- ## Helpers            ##
@@ -98,6 +118,51 @@ end
 local function resetPlayerHP()
   player.hp = totalHP ()
 end
+
+local function zoneIndexForLevel(level)
+  if level < 1 then level = 1 end
+  local idx = math.floor((level - 1) / 10) + 1
+  if idx > #BG_LIST then idx = #BG_LIST end
+  return idx
+end
+
+local function setBackgroundForLevel(level)
+  local idx = zoneIndexForLevel(level)
+  local target = sprites.backgrounds[idx]
+  if not target then return end
+  if bg.current ~= target then
+    bg.next = target
+    bg.t = 0 -- start cross-fade
+  end
+end
+
+-- Draw an image to the top area, using cover/contain/stretch
+local function drawBackgroundImage(img, x, y, w, h, mode)
+  if not img then return end
+  local iw, ih = img:getDimensions()
+  local sx, sy, dx, dy = 1, 1, x, y
+
+  if mode == "cover" then
+    local s = math.max(w / iw, h / ih)
+    sx, sy = s, s
+    dx = x + (w - iw * s) * 0.5
+    dy = y + (h - ih * s) * 0.5
+  elseif mode == "contain" then
+    local s = math.min(w / iw, h / ih)
+    sx, sy = s, s
+    dx = x + (w - iw * s) * 0.5
+    dy = y + (h - ih * s) * 0.5
+  elseif mode == "stretch" then
+    sx, sy = w / iw, h / ih
+    dx, dy = x, y
+  end
+
+  love.graphics.setColor(1, 1, 1, 1)
+  love.graphics.draw(img, dx, dy, 0, sx, sy)
+end
+
+
+
 
 -- Add a specific item to runtime inventory if missing
 local function addItemIfMissing(kind, id)
@@ -173,6 +238,8 @@ end
 local function checkLevelUps()
   while player.xp >= xpForLevel(player.level + 1) do
     player.level = player.level + 1
+    -- After finishing all level increases:
+    setBackgroundForLevel(player.level or 1)
     player.statPoints = (player.statPoints or 0) + 3
     player.baseHP = player.baseHP + 5
     resetPlayerHP()
@@ -233,7 +300,8 @@ end
 -- ## LOVE Callbacks     ##
 -- ########################
 function love.load()
-  love.window.setMode(W, H, {resizable=true, minwidth=640, minheight=480})
+  love.window.setMode(W, H, {resizable=true, minwidth=1920, minheight=1080})
+  --love.window.setMode(W, H, {resizable=true, minwidth=640, minheight=480})
   fonts.title = love.graphics.newFont(24)
   fonts.ui    = love.graphics.newFont(16)
   fonts.small = love.graphics.newFont(13)
@@ -261,6 +329,15 @@ function love.load()
       sprites.monsters[i] = ok and img or nil
     end
   end
+  
+  -- Backgrounds
+  for i, path in ipairs(BG_LIST) do
+    local ok, img = pcall(love.graphics.newImage, path)
+    if ok then sprites.backgrounds[i] = img end
+  end
+  setBackgroundForLevel(player.level or 1)
+
+
 end
 
 function love.resize(nw, nh) W, H = nw, nh end
@@ -317,6 +394,16 @@ function love.update(dt)
     smoothHP.player  = smoothHP.player  + (targetPlayer  - smoothHP.player)  * k
     smoothHP.monster = smoothHP.monster + (targetMonster - smoothHP.monster) * k
   end
+  
+  -- Background cross-fade
+  if bg.t < 1 and bg.next then
+    bg.t = math.min(1, bg.t + dt / bg.duration)
+    if bg.t >= 1 then
+      bg.current = bg.next
+      bg.next = nil
+    end
+  end
+
 end
 
 -- ########################
@@ -521,12 +608,13 @@ end
 
 local function drawInventoryColumn(kind, x, menuY, colW, padding)
   local header = (kind == "weapons") and "Weapons" or "Armor"
-  love.graphics.setFont(fonts.ui)
+  --simulate below line for different font changes
+  love.graphics.setFont(love.graphics.newFont(30))
   love.graphics.print(header, x, menuY + padding)
 
   local list = items[kind]
-  local itemH = 44
-  local topY = menuY + padding + 24
+  local itemH = 60
+  local topY = menuY + padding + 35
   local listH = (H - menuY) - padding - 8
   local maxVisible = math.max(1, math.floor((listH - 24) / itemH))
 
@@ -614,9 +702,31 @@ end
 function love.draw()
   love.graphics.clear(0.11,0.12,0.14)
 
-  local topH = H * (1 - menuHeightFrac)
-  love.graphics.setColor(1,1,1)
-  love.graphics.rectangle("line", 0, 0, W, topH)
+
+  -- === BACKGROUND (top area only, behind everything) ===
+  do
+    local topH = H * (1 - menuHeightFrac)
+
+    -- clip to the top panel so the bg doesn't spill into the menu
+    love.graphics.setScissor(0, 0, W, math.floor(topH))
+
+    -- base bg
+    if bg.current then
+      drawBackgroundImage(bg.current, 0, 0, W, topH, bg.mode) -- "cover" by default
+    end
+
+    -- cross-fade the next one on top
+    if bg.next and bg.t < 1 then
+      love.graphics.setColor(1, 1, 1, bg.t) -- fade-in alpha
+      drawBackgroundImage(bg.next, 0, 0, W, topH, bg.mode)
+      love.graphics.setColor(1, 1, 1, 1)
+    end
+
+    love.graphics.setScissor() -- clear clipping so the menu draws normally
+  end
+
+
+  
 
   drawRoundBanner()
   local statsBottom = drawStats()
