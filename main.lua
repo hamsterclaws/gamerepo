@@ -13,6 +13,7 @@ local ICON_SIZE = 28
 -- Applied to the LARGE images shown in the top area (monster and loot popup).
 -- You can tweak these to make everything bigger/smaller at once.
 local DEFAULT_MONSTER_SCALE = 1.5
+--was 1.5^^
 local DEFAULT_LOOT_SCALE    = 1.3
 
 local Items = require("items")
@@ -51,6 +52,15 @@ local game = {
 }
 
 local lootPopup = { visible = false, item = nil, timer = 0, duration = 0.4 }
+
+-- Smooth HP display (animated)
+local smoothHP = { player = 1, monster = 1 }
+
+-- Works with both code versions: uses totalHP() if present, else baseHP
+local function getPlayerMaxHP()
+  return (type(totalHP) == "function") and totalHP() or player.baseHP
+end
+
 
 -- Only these are available at start (others must drop)
 local START_WEAPONS = { stick=true, sword=false }
@@ -295,15 +305,49 @@ function love.update(dt)
       end
     end
   end
+  -- Smoothly approach target HP percentages
+  do
+    local targetPlayer = player and getPlayerMaxHP() > 0 and (player.hp / getPlayerMaxHP()) or 0
+    local targetMonster = (game.currentMonster and game.currentMonster.maxhp and game.currentMonster.maxhp > 0)
+                          and (game.currentMonster.hp / game.currentMonster.maxhp) or 0
+
+    local speed = 6      -- higher = snappier; try 4–10
+    local k = math.min(1, speed * dt)
+
+    smoothHP.player  = smoothHP.player  + (targetPlayer  - smoothHP.player)  * k
+    smoothHP.monster = smoothHP.monster + (targetMonster - smoothHP.monster) * k
+  end
 end
 
 -- ########################
 -- ## UI Drawing         ##
 -- ########################
-local function drawBar(x,y,w,h, ratio)
-  love.graphics.rectangle("line", x,y,w,h)
-  love.graphics.rectangle("fill", x+2, y+2, (w-4) * math.max(0, math.min(1, ratio)), h-4)
+
+
+
+local function drawBar(x, y, w, h, ratio)
+    ratio = math.max(0, math.min(1, ratio)) -- clamp
+
+    local r, g, b
+    if ratio > 0.5 then
+        local t = (ratio - 0.5) / 0.5 -- 0 at 50%, 1 at 100%
+        r, g, b = 1 - t, 1, 0        -- green at 100% → yellow at 50%
+    else
+        local t = ratio / 0.5        -- 0 at 0%, 1 at 50%
+        r, g, b = 1, t, 0            -- red at 0% → yellow at 50%
+    end
+
+    -- Border
+    love.graphics.setColor(1, 1, 1)
+    love.graphics.rectangle("line", x, y, w, h)
+
+    -- Fill
+    love.graphics.setColor(r, g, b)
+    love.graphics.rectangle("fill", x + 2, y + 2, (w - 4) * ratio, h - 4)
+
+    love.graphics.setColor(1, 1, 1) -- reset
 end
+
 
 local function drawStats()
   love.graphics.setFont(fonts.ui)
@@ -357,7 +401,7 @@ local function drawArenaImage()
   end
 
   -- Allow bigger box than before; still clamp to fit viewport nicely
-  local maxW, maxH = 300, 220  -- grew from the earlier 160x120
+  local maxW, maxH = 500, 500  -- grew from the earlier 160x120
   if img then
     local iw, ih = img:getDimensions()
     local fitScale = math.min(maxW / iw, maxH / ih)
@@ -580,10 +624,10 @@ function love.draw()
 
   local barW = 220
   local playerBarY = statsBottom + 8
-  drawBar(16, playerBarY, barW, 18, player.hp / totalHP())
+  drawBar(16, playerBarY, barW, 18, smoothHP.player)
   love.graphics.print("Player HP", 16, playerBarY + 22)
   if game.currentMonster then
-    drawBar(W - barW - 16, playerBarY, barW, 18, game.currentMonster.hp / game.currentMonster.maxhp)
+    drawBar(W - barW - 16, playerBarY, barW, 18, smoothHP.monster)
     love.graphics.print("Monster HP", W - barW - 16, playerBarY + 22)
   end
   

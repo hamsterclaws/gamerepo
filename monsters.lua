@@ -6,7 +6,7 @@ local M = {
   { name = "Slime Lvl. 1",  maxhp = 10, atk = 1, def = 0, img = "assets/monsters/slime.png",  xp = 5, scale = 1.2,
     loot = {
       { id = "woodClub", dropChance = 0.10 },
-      { id = "tshirt",      dropChance = 0.10 }}},
+      { id = "Plain T-Shirt",      dropChance = 0.90 }}},
   { name = "Slime Lvl. 2",  maxhp = 20, atk = 3, def = 0, img = "assets/monsters/slime.png",  xp = 7, scale = 1.2,
     loot = {
       { id = "woodClub", dropChance = 0.10 },

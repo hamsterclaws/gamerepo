@@ -16,7 +16,7 @@ M.armors = {
   { id = "cloth",  name = "Cloth",       atk = 0, def = 1, desc = "+1 DEF",            img = "assets/armor/cloth.png",  scale = 1.0 },
   { id = "chain",  name = "Chain",       atk = 0, def = 3, desc = "+3 DEF",            img = "assets/armor/chain.png",  scale = 1.1 },
   -- NOTE: ensure the path points to a PNG file in your assets; add ".png" if needed.
-  { id = "Plain T-Shirt", name = "tshirt", atk = 1, def = 3, desc = "+1 ATK, +3 DEF", img = "assets/armor/shirt.png", scale = 1.2 },
+  { id = "Plain T-Shirt", name = "tshirt", atk = 1, def = 3, desc = "+1 ATK, +3 DEF", img = "assets/armor/tshirt.png", scale = 1.2 },
 }
 
 return M
