@@ -26,8 +26,12 @@ local M = {
   { name = "Goblin", maxhp = 28, atk = 6, def = 2, img = "assets/monsters/goblin.png", xp = 5, scale = 1.3,
     loot = {
       { id = "Plain T-Shirt", dropChance = 0.9 }}},
-  { name = "Ogre",   maxhp = 40, atk = 8, def = 4, img = "assets/monsters/ogre.png",   xp = 5, scale = 1.6 },
-  { name = "SEAN BOSS", maxhp = 40, atk = 8, def = 1, img = "assets/monsters/sean.png", xp = 5, scale = 1.8 },
+  { name = "Ogre",   maxhp = 10, atk = 8, def = 4, img = "assets/monsters/ogre.png",   xp = 5, scale = 1.6 },
+  { name = "SEAN BOSS", maxhp = 10, atk = 8, def = 1, img = "assets/monsters/sean.png", xp = 5, scale = 1.8 },
+  { name = "SEAN BOSS2", maxhp = 10, atk = 8, def = 1, img = "assets/monsters/sean.png", xp = 5, scale = 1.8 },
+  { name = "SEAN BOSS3", maxhp = 10, atk = 8, def = 1, img = "assets/monsters/sean.png", xp = 5, scale = 1.8 },
+  { name = "SEAN BOSS4", maxhp = 10, atk = 8, def = 1, img = "assets/monsters/sean.png", xp = 5, scale = 1.8 },
+  { name = "SEAN BOSS5", maxhp = 10, atk = 8, def = 1, img = "assets/monsters/sean.png", xp = 5, scale = 1.8 },
 }
 
 return M

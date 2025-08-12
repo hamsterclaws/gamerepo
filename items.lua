@@ -5,7 +5,7 @@
 local M = {}
 
 M.weapons = {
-  { id = "stick",    name = "Stick",    atk = 2,  def = 0, desc = "+2 ATK",  img = "assets/items/stick.png",    scale = 1.0 },
+  { id = "stick",    name = "Stick",    atk = 3,  def = 0, desc = "+2 ATK",  img = "assets/items/stick.png",    scale = 1.0 },
   { id = "sword",    name = "Sword",    atk = 5,  def = 0, desc = "+5 ATK",  img = "assets/items/sword.png",    scale = 1.1 },
   { id = "scimitar", name = "Scimitar", atk = 5,  def = 0, desc = "+5 ATK",  img = "assets/items/scimitar.png", scale = 1.3 },
   { id = "axe",      name = "Axe",      atk = 15, def = 0, desc = "+5 ATK",  img = "assets/items/axe.png",      scale = 1.4 },

@@ -13,8 +13,11 @@ local ICON_SIZE = 40
 -- Applied to the LARGE images shown in the top area (monster and loot popup).
 -- You can tweak these to make everything bigger/smaller at once.
 local DEFAULT_MONSTER_SCALE = 1.5
---was 1.5^^
 local DEFAULT_LOOT_SCALE    = 1.3
+
+local DEFAULT_PLAYER_SCALE = 1.4
+local PLAYER_IMAGE = "assets/monsters/player.png"
+local PLAYER_FACE_RIGHT = false  -- set to false if your sprite already faces right
 
 local Items = require("items")
 local Monsters = require("monsters")
@@ -36,7 +39,7 @@ local player = { baseHP = 30, baseATK = 5, baseDEF = 1, hp = 30, level = 1, xp =
                  weapon = nil, armor  = nil }
 local items  = { weapons = {}, armors = {} }
 local monsters = {}
-local sprites = { items = {}, monsters = {}, backgrounds = {} }
+local sprites = { items = {}, monsters = {}, backgrounds = {}, player = nil }
 
 -- === Backgrounds (top 2/3) ===
 -- Replace these with your actual PNGs under ./assets/backgrounds/
@@ -52,7 +55,7 @@ local bg = {
   current = nil,      -- Image
   next = nil,         -- Image during transition
   t = 1,              -- 0→1 progress of transition (1 = done)
-  duration = 0.8,     -- seconds for a soft cross-fade
+  duration = 2.0,     -- seconds for a soft cross-fade - og 0.8
   mode = "cover",     -- "cover" | "stretch" | "contain"
 }
 
@@ -74,6 +77,13 @@ local lootPopup = { visible = false, item = nil, timer = 0, duration = 0.4 }
 
 -- Smooth HP display (animated)
 local smoothHP = { player = 1, monster = 1 }
+
+-- Attack bounce animation
+local bounce = {
+  player = { y = 0, timer = 0 },
+  monster = { y = 0, timer = 0 },
+}
+
 
 -- Works with both code versions: uses totalHP() if present, else baseHP
 local function getPlayerMaxHP()
@@ -119,22 +129,6 @@ local function resetPlayerHP()
   player.hp = totalHP ()
 end
 
-local function zoneIndexForLevel(level)
-  if level < 1 then level = 1 end
-  local idx = math.floor((level - 1) / 10) + 1
-  if idx > #BG_LIST then idx = #BG_LIST end
-  return idx
-end
-
-local function setBackgroundForLevel(level)
-  local idx = zoneIndexForLevel(level)
-  local target = sprites.backgrounds[idx]
-  if not target then return end
-  if bg.current ~= target then
-    bg.next = target
-    bg.t = 0 -- start cross-fade
-  end
-end
 
 -- Draw an image to the top area, using cover/contain/stretch
 local function drawBackgroundImage(img, x, y, w, h, mode)
@@ -157,12 +151,39 @@ local function drawBackgroundImage(img, x, y, w, h, mode)
     dx, dy = x, y
   end
 
-  love.graphics.setColor(1, 1, 1, 1)
+  --love.graphics.setColor(1, 1, 1, 1)
   love.graphics.draw(img, dx, dy, 0, sx, sy)
 end
 
+-- Round → zone (1..10 = zone1, 11..20 = zone2, ...)
+local function zoneIndexForRound(roundIndex)
+  local idx = math.floor((math.max(1, roundIndex) - 1) / 10) + 1
+  if idx > #BG_LIST then idx = #BG_LIST end
+  return idx
+end
 
+local function setBackgroundForRound(roundIndex)
+  local idx = zoneIndexForRound(roundIndex)
+  local target = sprites.backgrounds[idx]
+  if not target then
+    pushLog(("No background image for zone %d (round %d)"):format(idx, roundIndex))
+    return
+  end
 
+  if not bg.current then
+    bg.current = target
+    bg.next = nil
+    bg.t = 1
+    pushLog(("Init background -> zone %d"):format(idx))
+    return
+  end
+
+  if bg.current ~= target then
+    bg.next = target
+    bg.t = 0
+    pushLog(("Switching background -> zone %d (round %d)"):format(idx, roundIndex))
+  end
+end
 
 -- Add a specific item to runtime inventory if missing
 local function addItemIfMissing(kind, id)
@@ -238,16 +259,17 @@ end
 local function checkLevelUps()
   while player.xp >= xpForLevel(player.level + 1) do
     player.level = player.level + 1
-    -- After finishing all level increases:
-    setBackgroundForLevel(player.level or 1)
     player.statPoints = (player.statPoints or 0) + 3
     player.baseHP = player.baseHP + 5
     resetPlayerHP()
     leveled = true
     pushLog(("Level up! Now level %d (+3 stat points, +5 base HP)."):format(player.level))
   end
-  if leveled then game.justLeveled = true end
+  if leveled then
+    game.justLeveled = true
+  end
 end
+
 
 local function awardXPForKill(monDef)
   local gained = (monDef and monDef.xp) or 0
@@ -270,6 +292,7 @@ local function spawnNextMonster()
     return
   end
   game.monsterIndex = game.monsterIndex + 1
+  setBackgroundForRound(game.monsterIndex)
   local base = monsters[game.monsterIndex]
   game.currentMonster = {
     name = base.name,
@@ -330,13 +353,29 @@ function love.load()
     end
   end
   
+  -- Player sprite
+do
+  local ok, img = pcall(love.graphics.newImage, PLAYER_IMAGE)
+  if ok then sprites.player = img end
+end
+
   -- Backgrounds
   for i, path in ipairs(BG_LIST) do
     local ok, img = pcall(love.graphics.newImage, path)
-    if ok then sprites.backgrounds[i] = img end
+    if ok then
+      sprites.backgrounds[i] = img
+      pushLog(("BG %d ready: %s"):format(i, path))
+    else
+      pushLog(("BG %d FAILED to load: %s"):format(i, path))
+    end
   end
-  setBackgroundForLevel(player.level or 1)
 
+  -- set initial background based on Round 1
+  setBackgroundForRound(1)
+
+  
+  local ok, img = pcall(love.graphics.newImage, "assets/monsters/player.png")
+  if ok then sprites.player = img end
 
 end
 
@@ -350,6 +389,7 @@ function love.update(dt)
       if game.turn == "player" then
         local dmg = damage(totalATK(), game.currentMonster.def)
         game.currentMonster.hp = math.max(0, game.currentMonster.hp - dmg)
+        bounce.player.timer = 0.2  -- short bounce duration
         pushLog(("You hit %s for %d!"):format(game.currentMonster.name, dmg))
         if game.currentMonster.hp <= 0 then
           pushLog(game.currentMonster.name .. " is defeated!")
@@ -369,6 +409,7 @@ function love.update(dt)
       else
         local dmg = damage(game.currentMonster.atk, totalDEF())
         player.hp = math.max(0, player.hp - dmg)
+        bounce.monster.timer = 0.2  -- short bounce duration
         pushLog(("%s hits you for %d!"):format(game.currentMonster.name, dmg))
         if player.hp <= 0 then
           game.lost = true
@@ -395,6 +436,17 @@ function love.update(dt)
     smoothHP.monster = smoothHP.monster + (targetMonster - smoothHP.monster) * k
   end
   
+  -- Update bounce animations
+  for side, b in pairs(bounce) do
+    if b.timer > 0 then
+      b.timer = b.timer - dt
+      local t = math.max(b.timer, 0) / 0.2  -- normalized 0..1
+      b.y = math.sin(t * math.pi) * -30      -- up to -10px jump
+    else
+      b.y = 0
+    end
+  end
+
   -- Background cross-fade
   if bg.t < 1 and bg.next then
     bg.t = math.min(1, bg.t + dt / bg.duration)
@@ -468,52 +520,89 @@ local function drawRoundBanner()
   love.graphics.printf(("Round %d / %d"):format(roundShown, #monsters), 0, 4, W, "center")
 end
 
--- Top-area image (monster or loot) with per-entity + global scaling
+-- Top-area images: loot (center) OR player (left) vs monster (right)
 local function drawArenaImage()
   local topH = H * (1 - menuHeightFrac)
-  local xCenter, yCenter = W/2, topH/2 + 20
+  local arenaY = topH/2 + 20
 
-  local img, name, scale
+  -- === 1) Loot popup takes priority (centered) ===
   if lootPopup.visible and lootPopup.item then
-    img = sprites.items[lootPopup.item.id]
-    name = "You received: " .. lootPopup.item.name
-    scale = (lootPopup.item.scale or 1) * DEFAULT_LOOT_SCALE
-  elseif game.currentMonster then
-    img = sprites.monsters[game.monsterIndex]
-    name = game.currentMonster.name
-    local monDef = monsters[game.monsterIndex]
-    scale = ((monDef and monDef.scale) or 1) * DEFAULT_MONSTER_SCALE
-  else
-    return
-  end
+    local img  = sprites.items[lootPopup.item.id]
+    local name = "You received: " .. lootPopup.item.name
+    local scale = (lootPopup.item.scale or 1) * DEFAULT_LOOT_SCALE
 
-  -- Allow bigger box than before; still clamp to fit viewport nicely
-  local maxW, maxH = 500, 500  -- grew from the earlier 160x120
-  if img then
-    local iw, ih = img:getDimensions()
-    local fitScale = math.min(maxW / iw, maxH / ih)
-    local finalScale = math.min(scale, fitScale)  -- respect entity/global scale but never overflow box
-    local drawX = xCenter - (iw * finalScale) / 2
-    local drawY = yCenter - (ih * finalScale) / 2
+    local maxW, maxH = 500, 500
+    if img then
+      local iw, ih = img:getDimensions()
+      local fitScale = math.min(maxW / iw, maxH / ih)
+      local finalScale = math.min(scale, fitScale)
+      local drawX = W/2 - (iw * finalScale) / 2
+      local drawY = arenaY - (ih * finalScale) / 2
+      love.graphics.setColor(1,1,1)
+      love.graphics.draw(img, drawX, drawY, 0, finalScale, finalScale)
+    else
+      love.graphics.setColor(1,1,1)
+      love.graphics.rectangle("line", W/2 - maxW/2, arenaY - maxH/2, maxW, maxH, 8, 8)
+    end
+
+    love.graphics.setFont(fonts.ui)
     love.graphics.setColor(1,1,1)
-    love.graphics.draw(img, drawX, drawY, 0, finalScale, finalScale)
-  else
-    love.graphics.setColor(1,1,1)
-    love.graphics.rectangle("line", xCenter - maxW/2, yCenter - maxH/2, maxW, maxH, 8, 8)
-  end
+    love.graphics.printf(name, 0, arenaY + 260, W, "center")
 
-  love.graphics.setFont(fonts.ui)
-  love.graphics.setColor(1,1,1)
-  love.graphics.printf(name, 0, yCenter + maxH/2 + 10, W, "center")
-
-  if lootPopup.visible then
-    lootPopup.okButton = { x = W/2 - 50, y = yCenter + maxH/2 + 40, w = 100, h = 30 }
+    -- OK button (unchanged)
+    lootPopup.okButton = { x = W/2 - 50, y = arenaY + 290, w = 100, h = 30 }
     love.graphics.setColor(0.2,0.2,0.2)
     love.graphics.rectangle("fill", lootPopup.okButton.x, lootPopup.okButton.y, lootPopup.okButton.w, lootPopup.okButton.h, 6, 6)
     love.graphics.setColor(1,1,1)
     love.graphics.printf("OK", lootPopup.okButton.x, lootPopup.okButton.y + 6, lootPopup.okButton.w, "center")
+    return
   end
+
+  -- === 2) Otherwise: Player (left) vs Monster (right) ===
+  if not game.currentMonster then return end
+
+  -- boxes for each side
+  local boxW, boxH = 420, 300
+  local gap = 60
+  local leftCx  = W/2 - gap/2 - boxW/2   -- center-x of left box
+  local rightCx = W/2 + gap/2 + boxW/2   -- center-x of right box
+  local cy = arenaY
+
+  -- player image (you said it's "assets/monsters/player.png" and already loaded)
+  local playerImg = sprites.player or sprites.monsters.player -- try either key, just in case
+  local PLAYER_SCALE = 1.3  -- tweak if you want the player bigger/smaller by default
+
+  local function drawFitted(img, cx, cy, wantScale, maxW, maxH, yOffset)
+  if not img then return end
+  yOffset = yOffset or 0
+  local iw, ih = img:getDimensions()
+  local fitScale = math.min(maxW / iw, maxH / ih)
+  local finalScale = math.min(wantScale, fitScale)
+  local drawX = cx - (iw * finalScale) / 2
+  local drawY = cy - (ih * finalScale) / 2 + yOffset
+  love.graphics.setColor(1,1,1)
+  love.graphics.draw(img, drawX, drawY, 0, finalScale, finalScale)
+  end
+
+  -- draw player (left)
+  if playerImg then
+    drawFitted(playerImg, leftCx,  cy, PLAYER_SCALE, boxW, boxH, bounce.player.y)
+  end
+
+  -- draw monster (right) with your existing per-monster scale
+  local monImg = sprites.monsters[game.monsterIndex]
+  local monDef = monsters[game.monsterIndex]
+  local monScale = ((monDef and monDef.scale) or 1) * DEFAULT_MONSTER_SCALE
+  if monImg then
+    drawFitted(monImg,   rightCx,  cy, monScale,     boxW, boxH, bounce.monster.y)
+  end
+
+  -- label (keep your existing centered monster name)
+  love.graphics.setFont(fonts.ui)
+  love.graphics.setColor(1,1,1)
+  love.graphics.printf(game.currentMonster.name, 0, cy + boxH/2 + 10, W, "center")
 end
+
 
 -- In drawLog
 local function drawLog(x, y, w, h)
@@ -706,24 +795,25 @@ function love.draw()
   -- === BACKGROUND (top area only, behind everything) ===
   do
     local topH = H * (1 - menuHeightFrac)
-
-    -- clip to the top panel so the bg doesn't spill into the menu
     love.graphics.setScissor(0, 0, W, math.floor(topH))
+    love.graphics.setBlendMode("alpha") -- ensure normal alpha blending
 
-    -- base bg
-    if bg.current then
-      drawBackgroundImage(bg.current, 0, 0, W, topH, bg.mode) -- "cover" by default
-    end
-
-    -- cross-fade the next one on top
-    if bg.next and bg.t < 1 then
-      love.graphics.setColor(1, 1, 1, bg.t) -- fade-in alpha
-      drawBackgroundImage(bg.next, 0, 0, W, topH, bg.mode)
+    if bg.current and not bg.next then
+      -- no transition in progress
+      love.graphics.setColor(1, 1, 1, 1)
+      drawBackgroundImage(bg.current, 0, 0, W, topH, bg.mode)
+    elseif bg.current and bg.next then
+      -- cross-fade BOTH layers
+      love.graphics.setColor(1, 1, 1, 1 - bg.t)
+      drawBackgroundImage(bg.current, 0, 0, W, topH, bg.mode)
+      love.graphics.setColor(1, 1, 1, bg.t)
+      drawBackgroundImage(bg.next,    0, 0, W, topH, bg.mode)
       love.graphics.setColor(1, 1, 1, 1)
     end
 
-    love.graphics.setScissor() -- clear clipping so the menu draws normally
+    love.graphics.setScissor()
   end
+
 
 
   
@@ -875,6 +965,7 @@ function love.keypressed(key)
       won=false, lost=false
     }
     resetPlayerHP()
+    setBackgroundForRound(1)
     player.weapon = nil
     player.armor = nil
   end
