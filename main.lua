@@ -3,7 +3,7 @@
 
 local W, H = 800, 600
 local menuHeightFrac = 1/3
-local ui = { weaponScroll = 0, armorScroll = 0, logScroll = 0 }
+local ui = { weaponScroll = 0, armorScroll = 0, logScroll = 0, magicScroll = 0, useMagic = false, selectedSpellIndex = 1 }
 local fonts = {}
 
 -- Inventory list icon size (unchanged; keeps inventory tidy)
@@ -21,6 +21,8 @@ local PLAYER_FACE_RIGHT = false  -- set to false if your sprite already faces ri
 
 local Items = require("items")
 local Monsters = require("monsters")
+local MagicData = require("magic")
+
 
 -- ########################
 -- ## Game Data & State  ##
@@ -36,7 +38,7 @@ end
 
 local player = { baseHP = 30, baseATK = 5, baseDEF = 1, hp = 30, level = 1, xp = 0,
                  stats = { STR = 0, VIT = 0, DEF = 0 }, statPoints = 0,
-                 weapon = nil, armor  = nil }
+                 weapon = nil, armor  = nil, magic = 0, }
 local items  = { weapons = {}, armors = {} }
 local monsters = {}
 local sprites = { items = {}, monsters = {}, backgrounds = {}, player = nil }
@@ -113,11 +115,28 @@ local function totalDEF()
     + (player.armor  and (player.armor.def  or 0) or 0)
 end
 
+local function totalMAG()
+  return (player.magic or 0)
+       + (player.weapon and (player.weapon.magic or 0) or 0)
+       + (player.armor  and (player.armor.magic  or 0) or 0)
+end
+
+
 local function totalHP()
   local statHP = (player.stats and player.stats.VIT or 0)
   return player.baseHP + statHP
     -- + (player.weapon and (player.weapon.def or 0) or 0)
     -- + (player.armor  and (player.armor.def  or 0) or 0)
+end
+
+local function round(n) return math.floor(n + 0.5) end
+
+local function magicDamageAgainst(mon)
+  local spell = MagicData[ui.selectedSpellIndex]
+  if not spell then return 1 end
+  local base = totalMAG() * (spell.power or 1.0)
+  local def  = mon.def or 0
+  return math.max(1, round(base - def))
 end
 
 local function pushLog(text)
@@ -387,10 +406,18 @@ function love.update(dt)
     if game.battleTimer >= game.turnInterval then
       game.battleTimer = 0
       if game.turn == "player" then
-        local dmg = damage(totalATK(), game.currentMonster.def)
-        game.currentMonster.hp = math.max(0, game.currentMonster.hp - dmg)
-        bounce.player.timer = 0.2  -- short bounce duration
-        pushLog(("You hit %s for %d!"):format(game.currentMonster.name, dmg))
+        local dmg
+          if ui.useMagic then
+            dmg = magicDamageAgainst(game.currentMonster)
+            bounce.player.timer = 0.2  -- same bounce for spells
+            local s = MagicData[ui.selectedSpellIndex]
+            pushLog(("[Magic] %s for %d!"):format((s and s.name) or "Spell", dmg))
+          else
+            dmg = damage(totalATK(), game.currentMonster.def)
+            bounce.player.timer = 0.2
+            pushLog(("You hit %s for %d!"):format(game.currentMonster.name, dmg))
+          end
+          game.currentMonster.hp = math.max(0, game.currentMonster.hp - dmg)
         if game.currentMonster.hp <= 0 then
           pushLog(game.currentMonster.name .. " is defeated!")
           game.inBattle = false
@@ -458,6 +485,35 @@ function love.update(dt)
 
 end
 
+-- Returns a table with all key positions/sizes for the bottom menu layout.
+local function menuLayout()
+  local menuY   = H * (1 - menuHeightFrac)
+  local padding = 12
+
+  -- Left 2/3 area (three columns inside)
+  local leftX = padding
+  local leftW = math.floor(W * (2/3)) - padding * 2      -- keep left/right gutters
+
+  local gap   = padding
+  local colW  = (leftW - gap * 2) / 3                    -- three cols inside left area
+
+  local xWeapons = leftX
+  local xArmor   = leftX + colW + gap
+  local xMagic   = leftX + (colW + gap) * 2
+
+  -- Right 1/3 area (fight + log)
+  local rightX = leftX + leftW + padding
+  local rightW = W - rightX - padding
+
+  return {
+    menuY = menuY, padding = padding,
+    leftX = leftX, leftW = leftW, gap = gap, colW = colW,
+    xWeapons = xWeapons, xArmor = xArmor, xMagic = xMagic,
+    rightX = rightX, rightW = rightW,
+  }
+end
+
+
 -- ########################
 -- ## UI Drawing         ##
 -- ########################
@@ -495,6 +551,7 @@ local function drawStats()
   love.graphics.print(("HP: %d/%d"):format(player.hp, totalHP()), 16, y); y = y + 18
   love.graphics.print(("ATK: %d"):format(totalATK()), 16, y); y = y + 18
   love.graphics.print(("DEF: %d"):format(totalDEF()), 16, y); y = y + 18
+  love.graphics.print(("MAG: %d"):format(totalMAG()), 16, y); y = y + 18
   --love.graphics.print(("LVL: %d  XP: %d / %d"):format(player.level, player.xp, xpForLevel(player.level + 1)), 16, y); y = y + 18
   -- XP view: show 0 progress right after level-up
   local floorXP = xpForLevel(player.level)
@@ -698,7 +755,7 @@ end
 local function drawInventoryColumn(kind, x, menuY, colW, padding)
   local header = (kind == "weapons") and "Weapons" or "Armor"
   --simulate below line for different font changes
-  love.graphics.setFont(love.graphics.newFont(30))
+  love.graphics.setFont(love.graphics.newFont(20))--was 30
   love.graphics.print(header, x, menuY + padding)
 
   local list = items[kind]
@@ -751,22 +808,67 @@ local function drawInventoryColumn(kind, x, menuY, colW, padding)
   end
 end
 
-local function drawMenu()
-  local menuY = H * (1 - menuHeightFrac)
+local function drawMagicPanel(x, menuY, colW, padding)
+  local y = menuY + padding
   love.graphics.setFont(fonts.ui)
-  love.graphics.rectangle("line", 0, menuY, W, H - menuY)
+  love.graphics.print("Magic", x, y)
+  y = y + 24
 
-  local padding = 12
-  local colW = (W - padding*3) / 3
-  local x1 = padding
-  local x2 = x1 + colW + padding
-  local x3 = x2 + colW + padding
+  -- Toggle
+  ui.magicToggle = { x=x, y=y, w=colW, h=26 }
+  love.graphics.rectangle("line", ui.magicToggle.x, ui.magicToggle.y, colW, 26, 8, 8)
+  love.graphics.printf(ui.useMagic and "Use Magic: ON" or "Use Magic: OFF", x, y+6, colW, "center")
+  y = y + 26 + 6
 
-  drawInventoryColumn("weapons", x1, menuY, colW, padding)
-  drawInventoryColumn("armors",  x2, menuY, colW, padding)
+  -- Spell list
+  local listH = 128
+  love.graphics.rectangle("line", x, y, colW, listH, 8, 8)
 
-  ui.fightButton = {x=x3, y=menuY + padding, w=colW, h=44}
+  local lineH = 18
+  local maxVisible = math.max(1, math.floor((listH - 8) / lineH))
+  local maxScroll = math.max(0, #MagicData - maxVisible)
+  ui.magicScroll = math.max(0, math.min(ui.magicScroll or 0, maxScroll))
+
+  local start = 1 + ui.magicScroll
+  local finish = math.min(#MagicData, start + maxVisible - 1)
+
+  ui.magicButtons = {}
+  for i = start, finish do
+    local rowY = y + 4 + (i - start) * lineH
+    local selected = (i == ui.selectedSpellIndex)
+    if selected then love.graphics.setColor(1,1,0) end
+    love.graphics.print((selected and "➤ " or "  ") .. MagicData[i].name, x + 6, rowY)
+    love.graphics.setColor(1,1,1)
+    table.insert(ui.magicButtons, { x=x, y=rowY-2, w=colW, h=lineH, index=i })
+  end
+
+  love.graphics.setFont(fonts.small)
+  love.graphics.printf("Click spell • Wheel to scroll", x, y + listH + 2, colW, "center")
+  return y + listH + 22
+end
+
+
+local function drawMenu()
+  local L = menuLayout()
+  love.graphics.setFont(fonts.ui)
+
+  -- Frame for the whole bottom third
+  love.graphics.rectangle("line", 0, L.menuY, W, H - L.menuY)
+
+  -- LEFT 2/3 — three columns
+  drawInventoryColumn("weapons", L.xWeapons, L.menuY, L.colW, L.padding)
+  drawInventoryColumn("armors",  L.xArmor,   L.menuY, L.colW, L.padding)
+  drawMagicPanel(                    L.xMagic,   L.menuY, L.colW, L.padding)
+
+  -- RIGHT 1/3 — Fight button on top
+  ui.fightButton = {
+    x = L.rightX,
+    y = L.menuY + L.padding,
+    w = L.rightW,
+    h = 44
+  }
   love.graphics.rectangle("line", ui.fightButton.x, ui.fightButton.y, ui.fightButton.w, ui.fightButton.h, 10, 10)
+
   local fbLabel
   if game.won then
     fbLabel = "All Cleared"
@@ -776,17 +878,19 @@ local function drawMenu()
     fbLabel = "Battling..."
   else
     local nextRound = (game.monsterIndex == 0) and 1 or (game.monsterIndex + (game.currentMonster and 0 or 1))
-    fbLabel = ("Fight: Round ".. tostring(nextRound))
+    fbLabel = ("Fight: Round " .. tostring(nextRound))
   end
   love.graphics.printf(fbLabel, ui.fightButton.x, ui.fightButton.y + 12, ui.fightButton.w, "center")
 
+  -- Log fills the rest of the right column
   local logY = ui.fightButton.y + ui.fightButton.h + 8
-  local logH = (H - menuY) - (logY - menuY) - padding
+  local logH = (H - L.menuY) - (logY - L.menuY) - L.padding
   if logH > 40 then
-    love.graphics.rectangle("line", x3, logY, colW, logH, 8, 8)
-    drawLog(x3 + 8, logY + 8, colW - 16, logH - 16)
+    love.graphics.rectangle("line", L.rightX, logY, L.rightW, logH, 8, 8)
+    drawLog(L.rightX + 8, logY + 8, L.rightW - 16, logH - 16)
   end
 end
+
 
 function love.draw()
   love.graphics.clear(0.11,0.12,0.14)
@@ -906,6 +1010,25 @@ function love.mousepressed(x, y, button)
       end
     end
   end
+    -- Magic toggle
+  if ui.magicToggle and pointInRect(x, y, ui.magicToggle) then
+    ui.useMagic = not ui.useMagic
+    pushLog(ui.useMagic and "Magic enabled." or "Magic disabled.")
+    return
+  end
+
+  -- Select spell
+  if ui.magicButtons then
+    for _, r in ipairs(ui.magicButtons) do
+      if pointInRect(x, y, r) then
+        ui.selectedSpellIndex = r.index
+        local s = MagicData[ui.selectedSpellIndex]
+        pushLog("Selected spell: " .. (s and s.name or "Unknown"))
+        return
+      end
+    end
+  end
+
 
   if ui.fightButton and pointInRect(x, y, ui.fightButton) then
     if game.won then return end
@@ -920,40 +1043,46 @@ function love.mousepressed(x, y, button)
 end
 
 function love.wheelmoved(dx, dy)
+  if dy == 0 then return end
+
   local mx, my = love.mouse.getPosition()
-  local menuY = H * (1 - menuHeightFrac)
-  local padding = 12
-  local colW = (W - padding*3) / 3
-  local x1 = padding
-  local x2 = x1 + colW + padding
+  local L = menuLayout()
 
-  local listArea1 = { x = x1, y = menuY + padding, w = colW, h = H - menuY - padding }
-  local listArea2 = { x = x2, y = menuY + padding, w = colW, h = H - menuY - padding }
+  local function inArea(a)
+    return mx >= a.x and mx <= a.x + a.w and my >= a.y and my <= a.y + a.h
+  end
 
-  local function inArea(a) return mx >= a.x and mx <= a.x + a.w and my >= a.y and my <= a.y + a.h end
+  -- List rectangles for the three left columns
+  local listAreaWeapons = { x = L.xWeapons, y = L.menuY + L.padding, w = L.colW, h = H - L.menuY - L.padding }
+  local listAreaArmors  = { x = L.xArmor,   y = L.menuY + L.padding, w = L.colW, h = H - L.menuY - L.padding }
+  local listAreaMagic   = { x = L.xMagic,   y = L.menuY + L.padding, w = L.colW, h = H - L.menuY - L.padding }
 
-  if dy ~= 0 then
-    if inArea(listArea1) then
-      ui.weaponScroll = math.max(0, (ui.weaponScroll or 0) - dy)
-    elseif inArea(listArea2) then
-      ui.armorScroll  = math.max(0, (ui.armorScroll  or 0) - dy)
-    end
+  if inArea(listAreaWeapons) then
+    ui.weaponScroll = math.max(0, (ui.weaponScroll or 0) - dy)
+    return
+  end
+  if inArea(listAreaArmors) then
+    ui.armorScroll  = math.max(0, (ui.armorScroll  or 0) - dy)
+    return
+  end
+  if inArea(listAreaMagic) then
+    ui.magicScroll  = math.max(0, (ui.magicScroll  or 0) - dy)
+    return
   end
 
   -- Right column (log) wheel support
   local fightH = 44
-  local logY = (H * (1 - menuHeightFrac)) + 12 + fightH + 8
-  local colW2 = (W - 36) / 3
-  local x3 = 12 + colW2 * 2 + 12
-  local logH = H - logY - 12
-  local inLogArea = mx >= x3 and mx <= x3 + colW2 and my >= logY and my <= logY + logH
+  local logY   = L.menuY + L.padding + fightH + 8
+  local logH   = H - logY - L.padding
+  local inLogArea = mx >= L.rightX and mx <= L.rightX + L.rightW and my >= logY and my <= logY + logH
   if inLogArea then
-    local lineH = 16
+    local lineH   = 16
     local visible = math.floor((logH - 24) / lineH)
     local maxScroll = math.max(0, #game.log - visible)
     ui.logScroll = math.max(0, math.min(maxScroll, (ui.logScroll or 0) - dy))
   end
 end
+
 
 function love.keypressed(key)
   if key == "return" or key == "space" then
