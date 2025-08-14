@@ -1,5 +1,6 @@
 -- Love2D Stat-Based Fight Sim (with per-entity image scaling)
 -- Uses items.lua and monsters.lua in the project root (require("items"), require("monsters"))
+-- Testing Git Feature
 
 local W, H = 800, 600
 local menuHeightFrac = 1/3
