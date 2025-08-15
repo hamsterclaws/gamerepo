@@ -6,6 +6,39 @@ local menuHeightFrac = 1/3
 local ui = { weaponScroll = 0, armorScroll = 0, logScroll = 0, magicScroll = 0, useMagic = false, selectedSpellIndex = nil }
 local fonts = {}
 
+-- ====== Dynamic text fitting helpers ======
+local fontCache = {}
+local function getFontSized(px)
+  if not fontCache[px] then fontCache[px] = love.graphics.newFont(px) end
+  return fontCache[px]
+end
+
+-- Fit text in a given width (and optional height) by shrinking font size.
+-- Returns the font used and the chosen size.
+local function fittedText(text, maxW, maxH, startPx, minPx)
+  startPx = startPx or 18
+  minPx   = minPx   or 10
+  local size = startPx
+  while size > minPx do
+    local f = getFontSized(size)
+    local w = f:getWidth(text)
+    local h = f:getHeight()
+    if w <= maxW and (not maxH or h <= maxH) then
+      return f, size
+    end
+    size = size - 1
+  end
+  return getFontSized(minPx), minPx
+end
+
+-- Draw fitted text at (x,y) within a max box (w,h). Uses printf for clean clipping.
+local function drawFittedText(text, x, y, w, h, startPx, minPx, align)
+  local f = select(1, fittedText(text, w, h, startPx, minPx))
+  love.graphics.setFont(f)
+  love.graphics.printf(text, x, y, w, align or "left")
+end
+
+
 -- Inventory list icon size (unchanged; keeps inventory tidy)
 local ICON_SIZE = 40
 
@@ -130,6 +163,21 @@ local function totalHP()
 end
 
 local function round(n) return math.floor(n + 0.5) end
+
+local function drawScaledText(text, x, y, maxWidth, baseSize, color)
+    local fontSize = baseSize
+    local font = love.graphics.newFont(fontSize)
+
+    while font:getWidth(text) > maxWidth and fontSize > 8 do
+        fontSize = fontSize - 1
+        font = love.graphics.newFont(fontSize)
+    end
+
+    love.graphics.setFont(font)
+    love.graphics.setColor(color)
+    love.graphics.print(text, x, y)
+end
+
 
 local function magicDamageAgainst(mon)
   local spell = MagicData[ui.selectedSpellIndex]
@@ -342,8 +390,41 @@ end
 -- ## LOVE Callbacks     ##
 -- ########################
 function love.load()
-  love.window.setMode(W, H, {resizable=true, minwidth=1920, minheight=1080})
-  --love.window.setMode(W, H, {resizable=true, minwidth=640, minheight=480})
+  -- === Platform-aware window setup ===
+  local osname = love.system.getOS()            -- "OS X", "Windows", "Linux", "Android", "iOS"
+  local dw, dh = love.window.getDesktopDimensions()  -- primary display resolution in pixels
+
+  -- pick a target 16:9 that fits the desktop
+  local candidates = {
+    {1920,1080}, {1600,900}, {1366,768}, {1280,720}
+  }
+  local targetW, targetH = 1280, 720
+  for _, wh in ipairs(candidates) do
+    local w, h = wh[1], wh[2]
+    if w <= dw and h <= dh then targetW, targetH = w, h; break end
+  end
+
+  if osname == "OS X" then
+    -- On macOS, force HiDPI and a clear logical size
+    W, H = targetW, targetH
+    love.window.setMode(W, H, {
+      resizable = true,
+      minwidth = 1280,
+      minheight = 720,
+      highdpi = true
+    })
+  else
+    -- Windows/Linux: keep your existing baseline (can also use targetW/targetH if you prefer)
+    W, H = 1280, 720
+    love.window.setMode(W, H, {
+      resizable = true,
+      minwidth = 1280,
+      minheight = 720,
+      highdpi = false
+    })
+  end
+
+  -- === Your existing initialization ===
   fonts.title = love.graphics.newFont(24)
   fonts.ui    = love.graphics.newFont(16)
   fonts.small = love.graphics.newFont(13)
@@ -371,12 +452,12 @@ function love.load()
       sprites.monsters[i] = ok and img or nil
     end
   end
-  
+
   -- Player sprite
-do
-  local ok, img = pcall(love.graphics.newImage, PLAYER_IMAGE)
-  if ok then sprites.player = img end
-end
+  do
+    local ok, img = pcall(love.graphics.newImage, PLAYER_IMAGE)
+    if ok then sprites.player = img end
+  end
 
   -- Backgrounds
   for i, path in ipairs(BG_LIST) do
@@ -392,11 +473,11 @@ end
   -- set initial background based on Round 1
   setBackgroundForRound(1)
 
-  
-  local ok, img = pcall(love.graphics.newImage, "assets/monsters/player.png")
-  if ok then sprites.player = img end
-
+  -- (Optional second attempt if PLAYER_IMAGE wasn’t set)
+  local ok2, img2 = pcall(love.graphics.newImage, "assets/monsters/player.png")
+  if ok2 then sprites.player = img2 end
 end
+
 
 function love.resize(nw, nh) W, H = nw, nh end
 
@@ -561,27 +642,18 @@ local function drawStats()
   love.graphics.print(("LVL: %d  XP: %d / %d"):format(player.level, have, need), 16, y); y = y + 18
 
 
-    -- Weapon line
+  -- Weapon
   local weaponText = "Weapon: " .. (player.weapon and player.weapon.name or "None")
-  if player.weapon and not ui.useMagic then
-    love.graphics.setColor(0, 0, 0, 1); love.graphics.print(weaponText, 17, y + 1) -- shadow
-    love.graphics.setColor(1, 1, 0, 1); love.graphics.print(weaponText, 16, y)
-  else
-    love.graphics.setColor(1, 1, 1, 1); love.graphics.print(weaponText, 16, y)
-  end
+  drawScaledText(weaponText, 16, y, 200, 16, (player.weapon and not ui.useMagic) and {1,1,0,1} or {1,1,1,1})
   y = y + 18
-  love.graphics.setColor(1, 1, 1, 1)
 
-  -- Armor line
+  -- Armor
   local armorText = "Armor:  " .. (player.armor and player.armor.name or "None")
-  if player.armor then
-    love.graphics.setColor(0, 0, 0, 1); love.graphics.print(armorText, 17, y + 1)  -- shadow
-    love.graphics.setColor(1, 1, 0, 1); love.graphics.print(armorText, 16, y)
-  else
-    love.graphics.setColor(1, 1, 1, 1); love.graphics.print(armorText, 16, y)
-  end
+  drawScaledText(armorText, 16, y, 200, 16, player.armor and {1,1,0,1} or {1,1,1,1})
   y = y + 18
-  love.graphics.setColor(1, 1, 1, 1)
+
+
+
 
 
   return y
@@ -598,38 +670,89 @@ local function drawArenaImage()
   local topH = H * (1 - menuHeightFrac)
   local arenaY = topH/2 + 20
 
-  -- === 1) Loot popup takes priority (centered) ===
+  -- === 1) Loot popup takes priority (centered, clamped to top 2/3) ===
   if lootPopup.visible and lootPopup.item then
+    -- Compute available area (top panel only)
+    local topH = H * (1 - menuHeightFrac)
+
+    -- Clip everything we draw for the popup to the top area (safety)
+    love.graphics.setScissor(0, 0, W, math.floor(topH))
+
     local img  = sprites.items[lootPopup.item.id]
     local name = "You received: " .. lootPopup.item.name
-    local scale = (lootPopup.item.scale or 1) * DEFAULT_LOOT_SCALE
+    local wantScale = (lootPopup.item.scale or 1) * DEFAULT_LOOT_SCALE
 
-    local maxW, maxH = 500, 500
+    -- Spacing & metrics
+    local padding  = 16
+    local gapImgToName = 10
+    local gapNameToBtn = 14
+    local btnW, btnH = 120, 34
+
+    -- Measure name height
+    love.graphics.setFont(fonts.ui)
+    local nameH = fonts.ui:getHeight()
+
+    -- Figure out how tall the image may be so that (image + gaps + name + gaps + button) fits in topH
+    local chromeH = padding + gapImgToName + nameH + gapNameToBtn + btnH + padding
+    local maxImageH = math.max(40, topH - chromeH)  -- leave at least a bit for the image
+
+    -- If we have an image, scale it to fit both width and the computed max height
+    local drawX, drawY, finalScale, imgW, imgH = W/2, padding, 1, 0, 0
     if img then
       local iw, ih = img:getDimensions()
-      local fitScale = math.min(maxW / iw, maxH / ih)
-      local finalScale = math.min(scale, fitScale)
-      local drawX = W/2 - (iw * finalScale) / 2
-      local drawY = arenaY - (ih * finalScale) / 2
+      imgW, imgH = iw, ih
+      -- Allow the image to be wide; clamp its height to maxImageH and its width to W * 0.6
+      local fitScale = math.min(maxImageH / ih, (W * 0.6) / iw)
+      finalScale = math.min(wantScale, fitScale)
+      local drawW = iw * finalScale
+      local drawH = ih * finalScale
+
+      -- Center horizontally; stack from a computed top so the whole block is vertically centered
+      local contentH = drawH + gapImgToName + nameH + gapNameToBtn + btnH
+      local topY = math.floor((topH - contentH) * 0.5)
+      local imgX = math.floor(W/2 - drawW/2)
+      local imgY = topY
+
       love.graphics.setColor(1,1,1)
-      love.graphics.draw(img, drawX, drawY, 0, finalScale, finalScale)
+      love.graphics.draw(img, imgX, imgY, 0, finalScale, finalScale)
+
+      -- Name (centered under image)
+      local nameY = imgY + drawH + gapImgToName
+      love.graphics.setColor(1,1,1)
+      love.graphics.printf(name, 0, nameY, W, "center")
+
+      -- OK button under the name (still inside topH)
+      local btnY = nameY + nameH + gapNameToBtn
+      lootPopup.okButton = { x = math.floor(W/2 - btnW/2), y = btnY, w = btnW, h = btnH }
+      love.graphics.setColor(0.2,0.2,0.2)
+      love.graphics.rectangle("fill", lootPopup.okButton.x, lootPopup.okButton.y, btnW, btnH, 6, 6)
+      love.graphics.setColor(1,1,1)
+      love.graphics.printf("OK", lootPopup.okButton.x, lootPopup.okButton.y + (btnH-16)/2, btnW, "center")
     else
+      -- Fallback: simple framed box when the image wasn't found, also clamped to top 2/3
+      local boxW, boxH = math.min(420, W - padding*2), math.min(280, topH - padding*2)
+      local topY = math.floor((topH - (boxH + gapImgToName + nameH + gapNameToBtn + btnH)) * 0.5)
+      local boxX = math.floor(W/2 - boxW/2)
+      local boxY = topY
+
       love.graphics.setColor(1,1,1)
-      love.graphics.rectangle("line", W/2 - maxW/2, arenaY - maxH/2, maxW, maxH, 8, 8)
+      love.graphics.rectangle("line", boxX, boxY, boxW, boxH, 8, 8)
+
+      local nameY = boxY + boxH + gapImgToName
+      love.graphics.printf(name, 0, nameY, W, "center")
+
+      local btnY = nameY + nameH + gapNameToBtn
+      lootPopup.okButton = { x = math.floor(W/2 - btnW/2), y = btnY, w = btnW, h = btnH }
+      love.graphics.setColor(0.2,0.2,0.2)
+      love.graphics.rectangle("fill", lootPopup.okButton.x, lootPopup.okButton.y, btnW, btnH, 6, 6)
+      love.graphics.setColor(1,1,1)
+      love.graphics.printf("OK", lootPopup.okButton.x, lootPopup.okButton.y + (btnH-16)/2, btnW, "center")
     end
 
-    love.graphics.setFont(fonts.ui)
-    love.graphics.setColor(1,1,1)
-    love.graphics.printf(name, 0, arenaY + 260, W, "center")
-
-    -- OK button (unchanged)
-    lootPopup.okButton = { x = W/2 - 50, y = arenaY + 290, w = 100, h = 30 }
-    love.graphics.setColor(0.2,0.2,0.2)
-    love.graphics.rectangle("fill", lootPopup.okButton.x, lootPopup.okButton.y, lootPopup.okButton.w, lootPopup.okButton.h, 6, 6)
-    love.graphics.setColor(1,1,1)
-    love.graphics.printf("OK", lootPopup.okButton.x, lootPopup.okButton.y + 6, lootPopup.okButton.w, "center")
+    love.graphics.setScissor() -- clear clipping
     return
   end
+
 
   -- === 2) Otherwise: Player (left) vs Monster (right) ===
   if not game.currentMonster then return end
@@ -819,22 +942,38 @@ local function drawInventoryColumn(kind, x, menuY, colW, padding)
       love.graphics.rectangle("fill", r.x, r.y, r.w, r.h, 6, 6)
     end
 
+    -- NEW: dynamic fit inside the row box (single draw only)
+    local leftPad   = 6 + ICON_SIZE + 8
+    local innerX    = r.x + leftPad
+    local innerY    = r.y + 8
+    local innerW    = r.w - leftPad - 8     -- right padding
+    local innerH    = r.h - 16              -- vertical breathing room
+
     local label = it.name .. " (".. (it.desc or "") ..")" .. (showHighlight and " [E]" or "")
-    love.graphics.print(label, r.x + 6 + ICON_SIZE + 8, r.y + 10)
-    love.graphics.setColor(1,1,1)
 
-    local tx, ty = r.x + 6 + ICON_SIZE + 8, r.y + 10
-    if showHighlight then
-      love.graphics.setColor(0, 0, 0, 1)                 -- shadow
-      love.graphics.print(label, tx + 1, ty + 1)
-      love.graphics.setColor(1, 1, 0, 1)                 -- bright yellow
-      love.graphics.print(label, tx, ty)
-    else
-      love.graphics.setColor(1, 1, 1, 1)                 -- normal white
-      love.graphics.print(label, tx, ty)
-    end
+    -- set text color once (yellow when equipped/highlighted, else white)
+    love.graphics.setColor(showHighlight and 1 or 1, showHighlight and 1 or 1, showHighlight and 0 or 1, 1)
 
-    love.graphics.setColor(1, 1, 1, 1)   
+    -- single render; no shadow, no second pass
+    drawFittedText(label, innerX, innerY, innerW, innerH, 18, 10, "left")
+
+    -- reset color
+    love.graphics.setColor(1,1,1,1)
+
+
+
+--    local tx, ty = r.x + 6 + ICON_SIZE + 8, r.y + 10
+--    if showHighlight then
+--      love.graphics.setColor(0, 0, 0, 1)                 -- shadow
+--      love.graphics.print(label, tx + 1, ty + 1)
+--      love.graphics.setColor(1, 1, 0, 1)                 -- bright yellow
+--      love.graphics.print(label, tx, ty)
+--    else
+--      love.graphics.setColor(1, 1, 1, 1)                 -- normal white
+--      love.graphics.print(label, tx, ty)
+--    end
+
+--    love.graphics.setColor(1, 1, 1, 1)   
 
     if equipped then
         love.graphics.setColor(1,1,0)
@@ -859,11 +998,29 @@ local function drawMagicPanel(x, menuY, colW, padding)
   love.graphics.print("Magic", x, y)
   y = y + 24
 
-  -- Toggle
+  -- Toggle (highlight when ON, normal when OFF)
   ui.magicToggle = { x=x, y=y, w=colW, h=26 }
+
+  if ui.useMagic then
+    -- translucent yellow fill like equipped items
+    love.graphics.setColor(1, 1, 0, 0.15)
+    love.graphics.rectangle("fill", ui.magicToggle.x, ui.magicToggle.y, colW, 26, 8, 8)
+    love.graphics.setColor(1, 1, 0, 1)  -- yellow outline/text
+  else
+    love.graphics.setColor(1, 1, 1, 1)  -- white outline/text
+  end
+
+  -- outline
   love.graphics.rectangle("line", ui.magicToggle.x, ui.magicToggle.y, colW, 26, 8, 8)
-  love.graphics.printf(ui.useMagic and "Use Magic: ON" or "Use Magic: OFF", x, y+6, colW, "center")
+
+  -- label
+  love.graphics.setColor(ui.useMagic and 1 or 1, ui.useMagic and 1 or 1, ui.useMagic and 0 or 1, 1)
+  love.graphics.printf(ui.useMagic and "Use Magic: ON" or "Use Magic: OFF", x, y + 6, colW, "center")
+
+  -- reset and advance
+  love.graphics.setColor(1, 1, 1, 1)
   y = y + 26 + 6
+
 
   -- Spell list
   local listH = 128
