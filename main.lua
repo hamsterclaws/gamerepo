@@ -544,54 +544,87 @@ local function drawBar(x, y, w, h, ratio)
 end
 
 
+
+--####TEXT BOLDNESS#####
+local SH = { size = 5, ox = 3, oy = 3 } -- bigger size & offset for bolder shadow
+
+-- helper to draw shadowed text
+local function shadowPrint(text, x, y)
+    love.graphics.setColor(0,0,0,1)
+    love.graphics.print(text, x + SH.ox, y + SH.oy)
+    love.graphics.setColor(1,1,1,1)
+    love.graphics.print(text, x, y)
+end
+
+
 local function drawStats()
   love.graphics.setFont(fonts.ui)
   local y = 10
-  love.graphics.print("Player", 16, y); y = y + 22
-  love.graphics.print(("HP: %d/%d"):format(player.hp, totalHP()), 16, y); y = y + 18
-  love.graphics.print(("ATK: %d"):format(totalATK()), 16, y); y = y + 18
-  love.graphics.print(("DEF: %d"):format(totalDEF()), 16, y); y = y + 18
-  love.graphics.print(("MAG: %d"):format(totalMAG()), 16, y); y = y + 18
-  --love.graphics.print(("LVL: %d  XP: %d / %d"):format(player.level, player.xp, xpForLevel(player.level + 1)), 16, y); y = y + 18
-  -- XP view: show 0 progress right after level-up
+
+  -- Reusable shadowed text
+  -- color = {r,g,b}; opts = {size=N, ox=dx, oy=dy}
+  local function shadowPrint(text, x, y, color, opts)
+    opts  = opts  or {}
+    color = color or {1, 1, 1}
+    local size = opts.size or 3   -- thicker shadow = bigger number (try 3–5)
+    local ox   = opts.ox   or 2   -- shadow offset X
+    local oy   = opts.oy   or 2   -- shadow offset Y
+
+    -- draw bold shadow "cloud"
+    love.graphics.setColor(0, 0, 0, 1)
+    for dx = -size, size do
+      for dy = -size, size do
+        love.graphics.print(text, x + ox + dx, y + oy + dy)
+      end
+    end
+
+    -- main text
+    love.graphics.setColor(color[1], color[2], color[3], 1)
+    love.graphics.print(text, x, y)
+
+    love.graphics.setColor(1, 1, 1, 1) -- reset
+  end
+
+  local SH = { size = 3, ox = 2, oy = 2 }  -- tweak to taste
+
+  shadowPrint("Player", 16, y, nil, SH); y = y + 22
+  shadowPrint(("HP: %d/%d"):format(player.hp, totalHP()), 16, y, nil, SH); y = y + 18
+  shadowPrint(("ATK: %d"):format(totalATK()), 16, y, nil, SH); y = y + 18
+  shadowPrint(("DEF: %d"):format(totalDEF()), 16, y, nil, SH); y = y + 18
+  shadowPrint(("MAG: %d"):format(totalMAG()), 16, y, nil, SH); y = y + 18
+
   local floorXP = xpForLevel(player.level)
   local nextXP  = xpForLevel(player.level + 1)
   local need    = nextXP - floorXP
   local have    = game.justLeveled and 0 or math.max(0, player.xp - floorXP)
-  love.graphics.print(("LVL: %d  XP: %d / %d"):format(player.level, have, need), 16, y); y = y + 18
+  shadowPrint(("LVL: %d  XP: %d / %d"):format(player.level, have, need), 16, y, nil, SH); y = y + 18
 
+  -- Weapon
+  local weaponText  = "Weapon: " .. (player.weapon and player.weapon.name or "None")
+  local weaponColor = (player.weapon and not ui.useMagic) and {1, 1, 0} or {1, 1, 1}
+  shadowPrint(weaponText, 16, y, weaponColor, SH); y = y + 18
 
-    -- Weapon line
-  local weaponText = "Weapon: " .. (player.weapon and player.weapon.name or "None")
-  if player.weapon and not ui.useMagic then
-    love.graphics.setColor(0, 0, 0, 1); love.graphics.print(weaponText, 17, y + 1) -- shadow
-    love.graphics.setColor(1, 1, 0, 1); love.graphics.print(weaponText, 16, y)
-  else
-    love.graphics.setColor(1, 1, 1, 1); love.graphics.print(weaponText, 16, y)
-  end
-  y = y + 18
-  love.graphics.setColor(1, 1, 1, 1)
-
-  -- Armor line
-  local armorText = "Armor:  " .. (player.armor and player.armor.name or "None")
-  if player.armor then
-    love.graphics.setColor(0, 0, 0, 1); love.graphics.print(armorText, 17, y + 1)  -- shadow
-    love.graphics.setColor(1, 1, 0, 1); love.graphics.print(armorText, 16, y)
-  else
-    love.graphics.setColor(1, 1, 1, 1); love.graphics.print(armorText, 16, y)
-  end
-  y = y + 18
-  love.graphics.setColor(1, 1, 1, 1)
-
+  -- Armor
+  local armorText  = "Armor:  " .. (player.armor and player.armor.name or "None")
+  local armorColor = player.armor and {1, 1, 0} or {1, 1, 1}
+  shadowPrint(armorText, 16, y, armorColor, SH); y = y + 18
 
   return y
 end
 
+
 local function drawRoundBanner()
   local roundShown = (game.monsterIndex == 0) and 1 or game.monsterIndex
   love.graphics.setFont(fonts.title)
-  love.graphics.printf(("Round %d / %d"):format(roundShown, #monsters), 0, 4, W, "center")
+  local text = ("Round %d / %d"):format(roundShown, #monsters)
+  -- shadow
+  love.graphics.setColor(0,0,0,1)
+  love.graphics.printf(text, 0 + 2, 4 + 2, W, "center")
+  -- main
+  love.graphics.setColor(1,1,1,1)
+  love.graphics.printf(text, 0, 4, W, "center")
 end
+
 
 -- Top-area images: loot (center) OR player (left) vs monster (right)
 local function drawArenaImage()
@@ -967,9 +1000,6 @@ function love.draw()
   end
 
 
-
-  
-
   drawRoundBanner()
   local statsBottom = drawStats()
   drawArenaImage()
@@ -977,10 +1007,13 @@ function love.draw()
   local barW = 220
   local playerBarY = statsBottom + 8
   drawBar(16, playerBarY, barW, 18, smoothHP.player)
-  love.graphics.print("Player HP", 16, playerBarY + 22)
+  love.graphics.setColor(0,0,0,1); love.graphics.print("Player HP", 16+2, playerBarY+22+2)
+  love.graphics.setColor(1,1,1,1); love.graphics.print("Player HP", 16,   playerBarY+22)
+
   if game.currentMonster then
     drawBar(W - barW - 16, playerBarY, barW, 18, smoothHP.monster)
-    love.graphics.print("Monster HP", W - barW - 16, playerBarY + 22)
+    love.graphics.setColor(0,0,0,1); love.graphics.print("Monster HP", W - barW - 16 + 2, playerBarY + 22 + 2)
+    love.graphics.setColor(1,1,1,1); love.graphics.print("Monster HP", W - barW - 16,     playerBarY + 22)
   end
   
   -- NEW: stat point panel (bottom-left of the top two-thirds)
