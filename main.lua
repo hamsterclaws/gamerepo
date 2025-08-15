@@ -390,8 +390,41 @@ end
 -- ## LOVE Callbacks     ##
 -- ########################
 function love.load()
-  love.window.setMode(W, H, {resizable=true, minwidth=1280, minheight=720})
-  --love.window.setMode(W, H, {resizable=true, minwidth=640, minheight=480})
+  -- === Platform-aware window setup ===
+  local osname = love.system.getOS()            -- "OS X", "Windows", "Linux", "Android", "iOS"
+  local dw, dh = love.window.getDesktopDimensions()  -- primary display resolution in pixels
+
+  -- pick a target 16:9 that fits the desktop
+  local candidates = {
+    {1920,1080}, {1600,900}, {1366,768}, {1280,720}
+  }
+  local targetW, targetH = 1280, 720
+  for _, wh in ipairs(candidates) do
+    local w, h = wh[1], wh[2]
+    if w <= dw and h <= dh then targetW, targetH = w, h; break end
+  end
+
+  if osname == "OS X" then
+    -- On macOS, force HiDPI and a clear logical size
+    W, H = targetW, targetH
+    love.window.setMode(W, H, {
+      resizable = true,
+      minwidth = 1280,
+      minheight = 720,
+      highdpi = true
+    })
+  else
+    -- Windows/Linux: keep your existing baseline (can also use targetW/targetH if you prefer)
+    W, H = 1280, 720
+    love.window.setMode(W, H, {
+      resizable = true,
+      minwidth = 1280,
+      minheight = 720,
+      highdpi = false
+    })
+  end
+
+  -- === Your existing initialization ===
   fonts.title = love.graphics.newFont(24)
   fonts.ui    = love.graphics.newFont(16)
   fonts.small = love.graphics.newFont(13)
@@ -419,12 +452,12 @@ function love.load()
       sprites.monsters[i] = ok and img or nil
     end
   end
-  
+
   -- Player sprite
-do
-  local ok, img = pcall(love.graphics.newImage, PLAYER_IMAGE)
-  if ok then sprites.player = img end
-end
+  do
+    local ok, img = pcall(love.graphics.newImage, PLAYER_IMAGE)
+    if ok then sprites.player = img end
+  end
 
   -- Backgrounds
   for i, path in ipairs(BG_LIST) do
@@ -440,11 +473,11 @@ end
   -- set initial background based on Round 1
   setBackgroundForRound(1)
 
-  
-  local ok, img = pcall(love.graphics.newImage, "assets/monsters/player.png")
-  if ok then sprites.player = img end
-
+  -- (Optional second attempt if PLAYER_IMAGE wasn’t set)
+  local ok2, img2 = pcall(love.graphics.newImage, "assets/monsters/player.png")
+  if ok2 then sprites.player = img2 end
 end
+
 
 function love.resize(nw, nh) W, H = nw, nh end
 
