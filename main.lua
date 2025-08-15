@@ -1,11 +1,9 @@
 -- Love2D Stat-Based Fight Sim (with per-entity image scaling)
 -- Uses items.lua and monsters.lua in the project root (require("items"), require("monsters"))
---This should work!
---Mac Test!
 
 local W, H = 800, 600
 local menuHeightFrac = 1/3
-local ui = { weaponScroll = 0, armorScroll = 0, logScroll = 0, magicScroll = 0, useMagic = false, selectedSpellIndex = 1 }
+local ui = { weaponScroll = 0, armorScroll = 0, logScroll = 0, magicScroll = 0, useMagic = false, selectedSpellIndex = nil }
 local fonts = {}
 
 -- Inventory list icon size (unchanged; keeps inventory tidy)
@@ -563,12 +561,28 @@ local function drawStats()
   love.graphics.print(("LVL: %d  XP: %d / %d"):format(player.level, have, need), 16, y); y = y + 18
 
 
-  if player.weapon then love.graphics.setColor(1,1,0) end
-  love.graphics.print("Weapon: ".. (player.weapon and player.weapon.name or "None"), 16, y); y = y + 18
-  love.graphics.setColor(1,1,1)
-  if player.armor then love.graphics.setColor(1,1,0) end
-  love.graphics.print("Armor:  ".. (player.armor  and player.armor.name  or "None"), 16, y); y = y + 18
-  love.graphics.setColor(1,1,1)
+    -- Weapon line
+  local weaponText = "Weapon: " .. (player.weapon and player.weapon.name or "None")
+  if player.weapon and not ui.useMagic then
+    love.graphics.setColor(0, 0, 0, 1); love.graphics.print(weaponText, 17, y + 1) -- shadow
+    love.graphics.setColor(1, 1, 0, 1); love.graphics.print(weaponText, 16, y)
+  else
+    love.graphics.setColor(1, 1, 1, 1); love.graphics.print(weaponText, 16, y)
+  end
+  y = y + 18
+  love.graphics.setColor(1, 1, 1, 1)
+
+  -- Armor line
+  local armorText = "Armor:  " .. (player.armor and player.armor.name or "None")
+  if player.armor then
+    love.graphics.setColor(0, 0, 0, 1); love.graphics.print(armorText, 17, y + 1)  -- shadow
+    love.graphics.setColor(1, 1, 0, 1); love.graphics.print(armorText, 16, y)
+  else
+    love.graphics.setColor(1, 1, 1, 1); love.graphics.print(armorText, 16, y)
+  end
+  y = y + 18
+  love.graphics.setColor(1, 1, 1, 1)
+
 
   return y
 end
@@ -794,12 +808,41 @@ local function drawInventoryColumn(kind, x, menuY, colW, padding)
       love.graphics.draw(icon, r.x + 6, r.y + (itemH-ICON_SIZE)/2, 0, scaleToFit, scaleToFit)
     end
 
-    local equipped = (r.kind == "weapon" and player.weapon and player.weapon.id == it.id)
-                  or  (r.kind == "armor"  and player.armor  and player.armor.id  == it.id)
-    if equipped then love.graphics.setColor(1,1,0) end
-    local label = it.name .. " (".. (it.desc or "") ..")" .. (equipped and " [E]" or "")
+    -- highlight logic with NO dependency on battle/turn
+    local isEquippedWeapon = (r.kind == "weapon" and player.weapon and player.weapon.id == it.id)
+    local isEquippedArmor  = (r.kind == "armor"  and player.armor  and player.armor.id  == it.id)
+
+    -- show highlight/tag for armor always; for weapons only when Magic is OFF
+    local showHighlight = isEquippedArmor or (isEquippedWeapon and not ui.useMagic)
+    if showHighlight then
+      love.graphics.setColor(1, 1, 0, 0.15)              -- translucent yellow bg
+      love.graphics.rectangle("fill", r.x, r.y, r.w, r.h, 6, 6)
+    end
+
+    local label = it.name .. " (".. (it.desc or "") ..")" .. (showHighlight and " [E]" or "")
     love.graphics.print(label, r.x + 6 + ICON_SIZE + 8, r.y + 10)
     love.graphics.setColor(1,1,1)
+
+    local tx, ty = r.x + 6 + ICON_SIZE + 8, r.y + 10
+    if showHighlight then
+      love.graphics.setColor(0, 0, 0, 1)                 -- shadow
+      love.graphics.print(label, tx + 1, ty + 1)
+      love.graphics.setColor(1, 1, 0, 1)                 -- bright yellow
+      love.graphics.print(label, tx, ty)
+    else
+      love.graphics.setColor(1, 1, 1, 1)                 -- normal white
+      love.graphics.print(label, tx, ty)
+    end
+
+    love.graphics.setColor(1, 1, 1, 1)   
+
+    if equipped then
+        love.graphics.setColor(1,1,0)
+    end
+
+--    local label = it.name .. " (".. (it.desc or "") ..")" .. (equipped and " [E]" or "")
+--    love.graphics.print(label, r.x + 6 + ICON_SIZE + 8, r.y + 10)
+--    love.graphics.setColor(1,1,1)
 
     table.insert(ui[buttonsKey], r)
   end
@@ -837,12 +880,15 @@ local function drawMagicPanel(x, menuY, colW, padding)
   ui.magicButtons = {}
   for i = start, finish do
     local rowY = y + 4 + (i - start) * lineH
-    local selected = (i == ui.selectedSpellIndex)
+    local selected = ui.useMagic and (i == ui.selectedSpellIndex)
+
     if selected then love.graphics.setColor(1,1,0) end
     love.graphics.print((selected and "➤ " or "  ") .. MagicData[i].name, x + 6, rowY)
     love.graphics.setColor(1,1,1)
+    
     table.insert(ui.magicButtons, { x=x, y=rowY-2, w=colW, h=lineH, index=i })
   end
+
 
   love.graphics.setFont(fonts.small)
   love.graphics.printf("Click spell • Wheel to scroll", x, y + listH + 2, colW, "center")
@@ -986,6 +1032,10 @@ function love.mousepressed(x, y, button)
   if ui.weaponButtons then
     for _, r in ipairs(ui.weaponButtons) do
       if pointInRect(x, y, r) then
+        if ui.useMagic then
+        pushLog("Disable Magic to equip a weapon.")
+        return
+      end
         if player.weapon and player.weapon.id == r.item.id then
           player.weapon = nil
           pushLog("Unequipped weapon.")
@@ -1012,12 +1062,22 @@ function love.mousepressed(x, y, button)
       end
     end
   end
-    -- Magic toggle
+  -- Magic toggle (mutually exclusive with weapons)
   if ui.magicToggle and pointInRect(x, y, ui.magicToggle) then
     ui.useMagic = not ui.useMagic
-    pushLog(ui.useMagic and "Magic enabled." or "Magic disabled.")
+    if ui.useMagic then
+      -- turning magic ON clears any equipped weapon
+      if player.weapon then
+        player.weapon = nil
+      end
+      pushLog("Magic enabled. Weapon deselected.")
+    else
+      -- turning magic OFF keeps the weapon deselected (do nothing)
+      pushLog("Magic disabled.")
+    end
     return
   end
+
 
   -- Select spell
   if ui.magicButtons then
